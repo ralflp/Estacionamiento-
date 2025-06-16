@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ page_title|default:"Lista de Vehículos" }}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 800px; margin: auto; }
+        .action-links { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ page_title|default:"Lista de Vehículos" }}</h1>
+        <div class="action-links">
+            <a href="{% url 'log_viewer_app:vehicle_create' %}">Añadir Nuevo Vehículo</a>
+            <br>
+            <a href="{% url 'log_viewer_app:person_list' %}">Ver Lista de Personas</a>
+            <br>
+            <a href="{% url 'log_viewer_app:access_log_list' %}">Ver Registros de Acceso</a>
+        </div>
+
+        {% if vehicles %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Placa</th>
+                        <th>Propietario</th>
+                        <th>Descripción</th>
+                        <!--<th>Acciones</th>-->
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for vehicle in vehicles %}
+                        <tr>
+                            <td>{{ vehicle.license_plate }}</td>
+                            <td>{{ vehicle.owner.full_name }} ({{ vehicle.owner.identifier }})</td>
+                            <td>{{ vehicle.description|default:"-" }}</td>
+                            <!--<td><a href="#">Editar</a> | <a href="#">Eliminar</a></td>-->
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No hay vehículos registrados todavía.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
