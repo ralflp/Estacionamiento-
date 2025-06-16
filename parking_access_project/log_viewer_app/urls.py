@@ -12,10 +12,13 @@ urlpatterns = [
     path('persons/add/', views.person_create_view, name='person_create'),
     path('vehicles/', views.vehicle_list_view, name='vehicle_list'),
     path('vehicles/add/', views.vehicle_create_view, name='vehicle_create'),
+
+    # URLs para Permisos de Acceso
     path('permissions/', views.permission_list_view, name='permission_list'),
     path('permissions/assign/', views.permission_create_view, name='permission_create'),
+    path('permissions/<int:pk>/update/', views.permission_update_view, name='permission_update'), # Nueva URL
 
-    # Nuevas URLs para Dispositivos de Control
+    # URLs para Dispositivos de Control
     path('control-devices/', views.control_device_list_view, name='control_device_list'),
     path('control-devices/add/', views.control_device_create_view, name='control_device_create'),
     path('control-devices/<int:pk>/update/', views.control_device_update_view, name='control_device_update'),

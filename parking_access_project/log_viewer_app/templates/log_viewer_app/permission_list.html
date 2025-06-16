@@ -36,7 +36,7 @@
                         <th>Estado</th>
                         <th>Válido Desde</th>
                         <th>Válido Hasta</th>
-                        <!--<th>Acciones</th>-->
+                        <th>Acciones</th> <!-- Nueva cabecera -->
                     </tr>
                 </thead>
                 <tbody>
@@ -49,7 +49,9 @@
                             </td>
                             <td>{{ perm.valid_from|date:"Y-m-d H:i"|default:"Siempre" }}</td>
                             <td>{{ perm.valid_until|date:"Y-m-d H:i"|default:"Sin caducidad" }}</td>
-                            <!--<td><a href="#">Editar</a> | <a href="#">Eliminar</a></td>-->
+                            <td>
+                                <a href="{% url 'log_viewer_app:permission_update' perm.pk %}">Editar</a>
+                            </td> <!-- Nueva celda con el enlace -->
                         </tr>
                     {% endfor %}
                 </tbody>

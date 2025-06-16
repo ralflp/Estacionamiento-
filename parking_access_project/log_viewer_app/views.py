@@ -55,6 +55,23 @@ def permission_create_view(request):
     context = {'form': form, 'page_title': 'Asignar Nuevo Permiso de Acceso'}
     return render(request, 'log_viewer_app/permission_form.html', context)
 
+def permission_update_view(request, pk):
+    permission = get_object_or_404(AccessPermission, pk=pk)
+    if request.method == 'POST':
+        form = AccessPermissionForm(request.POST, instance=permission)
+        if form.is_valid():
+            form.save()
+            return redirect('log_viewer_app:permission_list')
+    else:
+        form = AccessPermissionForm(instance=permission)
+
+    context = {
+        'form': form,
+        'permission_instance': permission, # Pasar la instancia para posible uso en la plantilla
+        'page_title': f"Editar Permiso: {permission.person.full_name} en {permission.access_point.name}"
+    }
+    return render(request, 'log_viewer_app/permission_form.html', context)
+
 def control_device_list_view(request):
     devices = ControlDevice.objects.all().select_related('access_point').order_by('name')
     context = {
