@@ -1,9 +1,10 @@
-from django.contrib import admin, messages # messages es nuevo aquí
-from .models import ( # Importación agrupada
+from django.contrib import admin, messages
+from .models import (
     AccessLog, Person, Vehicle, AccessPoint,
     AccessPermission, ControlDevice, Payment
 )
-from .utils import process_payment_for_access # Importar la función de procesamiento
+from .utils import process_payment_for_access
+from rest_framework.authtoken.models import Token # Nueva importación para el modelo Token
 
 # Register your models here.
 
@@ -18,6 +19,10 @@ if not admin.site.is_registered(AccessPoint):
     admin.site.register(AccessPoint)
 if not admin.site.is_registered(AccessPermission):
     admin.site.register(AccessPermission)
+
+# Registro del modelo Token de DRF (puede ser simple o con una clase ModelAdmin personalizada)
+if not admin.site.is_registered(Token):
+    admin.site.register(Token)
 
 
 # Clase ModelAdmin personalizada para ControlDevice (ya existente)
@@ -42,7 +47,7 @@ class ControlDeviceAdmin(admin.ModelAdmin):
     )
     readonly_fields = ('created_at', 'updated_at')
 
-# Clase ModelAdmin personalizada para Payment (nueva)
+# Clase ModelAdmin personalizada para Payment (ya existente)
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
     list_display = (
@@ -76,7 +81,7 @@ class PaymentAdmin(admin.ModelAdmin):
     )
     readonly_fields = ('created_at', 'updated_at')
 
-    actions = ['process_selected_payments_action'] # Nombre de la acción
+    actions = ['process_selected_payments_action']
 
     def process_selected_payments_action(self, request, queryset):
         processed_count = 0
@@ -84,16 +89,14 @@ class PaymentAdmin(admin.ModelAdmin):
         failed_count = 0
 
         for payment in queryset:
-            # Chequeo explícito antes de llamar a la función para mensaje más claro al admin
             if payment.processed_for_access:
                 already_processed_count +=1
-                continue # No llamar a process_payment_for_access si ya estaba procesado
+                continue
 
-            success = process_payment_for_access(payment) # Llama a la función de utils
+            success = process_payment_for_access(payment)
             if success:
                 processed_count += 1
             else:
-                # La función process_payment_for_access ya loguea los detalles del error.
                 failed_count +=1
 
         if processed_count > 0:
@@ -103,7 +106,7 @@ class PaymentAdmin(admin.ModelAdmin):
         if already_processed_count > 0:
              self.message_user(request,
                               f"{already_processed_count} pago(s) ya habían sido procesados anteriormente y fueron omitidos.",
-                              messages.INFO) # Cambiado a INFO para diferenciarlo de un éxito nuevo
+                              messages.INFO)
         if failed_count > 0:
             self.message_user(request,
                               f"{failed_count} pago(s) no pudieron ser procesados. Revise los logs del sistema para más detalles.",

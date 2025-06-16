@@ -1,6 +1,6 @@
 from django.db import models
-from django.utils import timezone # Para valores por defecto de fechas
-# from django.conf import settings # No es necesario para este modelo específico
+from django.utils import timezone
+from django.conf import settings # Added for settings.AUTH_USER_MODEL
 
 class AccessLog(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
@@ -15,6 +15,14 @@ class AccessLog(models.Model):
 class Person(models.Model):
     full_name = models.CharField(max_length=200, help_text="Nombre completo de la persona")
     identifier = models.CharField(max_length=100, unique=True, help_text="Identificador único (e.g., DNI, ID de empleado)")
+    user = models.OneToOneField( # New field
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='person_profile',
+        help_text="Usuario del sistema Django asociado a esta persona (opcional)"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

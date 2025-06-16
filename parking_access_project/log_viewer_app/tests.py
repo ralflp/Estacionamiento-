@@ -11,6 +11,13 @@ from django.contrib import admin
 from django.contrib.messages.storage.fallback import FallbackStorage
 from .admin import PaymentAdmin
 
+# DRF Test specific imports
+from rest_framework.test import APIClient
+from django.contrib.auth.models import User # Standard Django User model
+from rest_framework.authtoken.models import Token
+from rest_framework import status
+from .serializers import AccessRequestSerializer, AccessResponseSerializer, AccessPermissionSerializer
+
 
 # --- Model Tests ---
 class PersonModelTest(TestCase):
@@ -628,54 +635,53 @@ class PaymentAdminActionTest(TestCase):
         AccessPoint.objects.get_or_create(name="Main Entrance")
 
         self.payment1_new_pk = Payment.objects.create(person=self.person1, amount=20.00, processed_for_access=False).pk
+        self.payment1_new = Payment.objects.get(pk=self.payment1_new_pk)
+
         self.payment2_processed_pk = Payment.objects.create(person=self.person2, amount=20.00, processed_for_access=True).pk
+        self.payment2_processed = Payment.objects.get(pk=self.payment2_processed_pk)
+
         self.payment3_new_fail_pk = Payment.objects.create(person=self.person3, amount=20.00, processed_for_access=False).pk
+        self.payment3_new_fail = Payment.objects.get(pk=self.payment3_new_fail_pk)
 
         self.request = MagicMock()
         setattr(self.request, 'session', 'session')
         messages_storage = FallbackStorage(self.request)
         setattr(self.request, '_messages', messages_storage)
 
-    @patch('log_viewer_app.admin.process_payment_for_access') # Corrected patch target
+    @patch('log_viewer_app.admin.process_payment_for_access')
     def test_process_selected_payments_action(self, mock_process_func):
-        # Retrieve fresh instances for the mock side effect to reference their PKs
-        payment1_new = Payment.objects.get(pk=self.payment1_new_pk)
-        payment3_new_fail = Payment.objects.get(pk=self.payment3_new_fail_pk)
-
         def side_effect_func(payment_instance):
-            if payment_instance.pk == payment1_new.pk: return True
-            elif payment_instance.pk == payment3_new_fail.pk: return False
+            if payment_instance.pk == self.payment1_new.pk: return True
+            elif payment_instance.pk == self.payment3_new_fail.pk: return False
             return True
         mock_process_func.side_effect = side_effect_func
 
-        # Pass a list of specific instances to the action
-        # These instances are fresh from DB via setUp and their PKs
         payments_list_for_action = [
-            payment1_new,
-            Payment.objects.get(pk=self.payment2_processed_pk),
-            payment3_new_fail
+            self.payment1_new,
+            self.payment2_processed,
+            self.payment3_new_fail
         ]
 
-        self.assertFalse(payment1_new.processed_for_access)
-        self.assertTrue(Payment.objects.get(pk=self.payment2_processed_pk).processed_for_access)
-        self.assertFalse(payment3_new_fail.processed_for_access)
+        self.assertFalse(self.payment1_new.processed_for_access)
+        self.assertTrue(self.payment2_processed.processed_for_access)
+        self.assertFalse(self.payment3_new_fail.processed_for_access)
 
         self.payment_admin.process_selected_payments_action(self.request, payments_list_for_action)
 
         self.assertEqual(mock_process_func.call_count, 2)
-        mock_process_func.assert_any_call(payment1_new)
-        mock_process_func.assert_any_call(payment3_new_fail)
+        mock_process_func.assert_any_call(self.payment1_new)
+        mock_process_func.assert_any_call(self.payment3_new_fail)
 
         admin_messages = [m.message for m in list(self.request._messages)]
         self.assertIn("1 pago(s) procesado(s) exitosamente para activar/extender acceso.", admin_messages)
         self.assertIn("1 pago(s) ya habían sido procesados anteriormente y fueron omitidos.", admin_messages)
         self.assertIn("1 pago(s) no pudieron ser procesados. Revise los logs del sistema para más detalles.", admin_messages)
 
-    @patch('log_viewer_app.admin.process_payment_for_access') # Corrected patch target
+    @patch('log_viewer_app.admin.process_payment_for_access')
     def test_process_single_unprocessed_payment(self, mock_process_func):
         mock_process_func.return_value = True
 
-        payment_to_process = Payment.objects.get(pk=self.payment1_new_pk)
+        payment_to_process = self.payment1_new
         self.assertFalse(payment_to_process.processed_for_access)
 
         single_payment_list = [payment_to_process]
@@ -686,3 +692,126 @@ class PaymentAdminActionTest(TestCase):
         admin_messages = [m.message for m in list(self.request._messages)]
         self.assertIn("1 pago(s) procesado(s) exitosamente para activar/extender acceso.", admin_messages)
         self.assertEqual(len(admin_messages), 1)
+
+# --- API Test Classes ---
+class TokenAuthAPITest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='apiuser', password='apipassword123')
+        self.token_url = reverse('log_viewer_app:api_auth_token')
+
+    def test_obtain_token_success(self):
+        response = self.client.post(self.token_url, {'username': 'apiuser', 'password': 'apipassword123'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('token', response.data)
+        self.assertTrue(Token.objects.filter(user=self.user, key=response.data['token']).exists())
+
+    def test_obtain_token_failure_wrong_password(self):
+        response = self.client.post(self.token_url, {'username': 'apiuser', 'password': 'wrongpassword'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertNotIn('token', response.data)
+
+    def test_obtain_token_failure_non_existent_user(self):
+        response = self.client.post(self.token_url, {'username': 'nouser', 'password': 'somepassword'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertNotIn('token', response.data)
+
+class AccessVerificationAPITest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='testapiuser', password='testpassword')
+        self.token = Token.objects.create(user=self.user)
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token.key)
+
+        self.person_allowed = Person.objects.create(full_name="Allowed API User", identifier="QR_API_ALLOW")
+        self.ap_main = AccessPoint.objects.create(name="API_Main_Gate")
+        AccessPermission.objects.create(person=self.person_allowed, access_point=self.ap_main, is_active=True)
+
+        self.url = reverse('log_viewer_app:api_verify_access')
+
+    def test_verify_access_unauthenticated(self):
+        unauth_client = APIClient()
+        response = unauth_client.post(self.url, {'qr_identifier': 'QR_API_ALLOW', 'access_point_name': 'API_Main_Gate'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_verify_access_authenticated_granted(self):
+        data = {'qr_identifier': 'QR_API_ALLOW', 'access_point_name': 'API_Main_Gate'}
+        response = self.client.post(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['access_granted'])
+        self.assertEqual(response.data['person_name'], self.person_allowed.full_name)
+        self.assertEqual(response.data['access_point_name'], self.ap_main.name)
+
+    def test_verify_access_authenticated_denied_no_permission(self):
+        data = {'qr_identifier': 'QR_API_DENY_NO_PERM', 'access_point_name': 'API_Main_Gate'}
+        Person.objects.create(full_name="No Perm API User", identifier="QR_API_DENY_NO_PERM")
+        response = self.client.post(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['access_granted'])
+
+    def test_verify_access_authenticated_denied_person_not_found(self):
+        data = {'qr_identifier': 'QR_NON_EXISTENT', 'access_point_name': 'API_Main_Gate'}
+        response = self.client.post(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['access_granted'])
+        self.assertIsNone(response.data['person_name'])
+
+
+    def test_verify_access_invalid_request_data_missing_qr(self):
+        data = {'access_point_name': 'API_Main_Gate'}
+        response = self.client.post(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('qr_identifier', response.data)
+
+    def test_verify_access_invalid_request_data_missing_ap(self):
+        data = {'qr_identifier': 'QR_API_ALLOW'}
+        response = self.client.post(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('access_point_name', response.data)
+
+
+class UserPermissionsListAPITest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user1 = User.objects.create_user(username='user1perm', password='password1')
+        self.person1 = Person.objects.create(full_name="User One Perms", identifier="U1P", user=self.user1)
+        self.token1 = Token.objects.create(user=self.user1)
+        self.ap1 = AccessPoint.objects.create(name="AP Test 1")
+        self.ap2 = AccessPoint.objects.create(name="AP Test 2")
+        AccessPermission.objects.create(person=self.person1, access_point=self.ap1, is_active=True)
+        AccessPermission.objects.create(person=self.person1, access_point=self.ap2, is_active=False)
+
+        self.user2 = User.objects.create_user(username='user2noperm', password='password2')
+        self.person2 = Person.objects.create(full_name="User Two No Perms", identifier="U2NP", user=self.user2)
+        self.token2 = Token.objects.create(user=self.user2)
+
+        self.user3_no_profile = User.objects.create_user(username='user3noprofile', password='password3')
+        self.token3 = Token.objects.create(user=self.user3_no_profile)
+
+        self.url = reverse('log_viewer_app:api_user_permissions')
+
+    def test_list_permissions_unauthenticated(self):
+        unauth_client = APIClient()
+        response = unauth_client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_list_permissions_user_with_permissions(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token1.key)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        self.assertContains(response, self.person1.full_name)
+        self.assertContains(response, self.ap1.name)
+
+
+    def test_list_permissions_user_no_permissions(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token2.key)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+
+    def test_list_permissions_user_no_person_profile(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token3.key)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)

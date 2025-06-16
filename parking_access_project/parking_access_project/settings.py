@@ -38,6 +38,9 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'log_viewer_app',
+    'rest_framework',
+    'rest_framework.authtoken', # For token authentication
+    'django_filters',
 ]
 
 MIDDLEWARE = [
@@ -129,3 +132,14 @@ MQTT_CLIENT_ID = 'django_parking_access_app'
 # Opcional: credenciales si tu broker las requiere
 # MQTT_USERNAME = 'your_username'
 # MQTT_PASSWORD = 'your_password'
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication', # Para clientes API
+        'rest_framework.authentication.SessionAuthentication', # Para la API navegable y pruebas en browser
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated', # Por defecto, requerir autenticación
+    ]
+    # Podríamos añadir DEFAULT_PAGINATION_CLASS, DEFAULT_FILTER_BACKENDS más adelante
+}
