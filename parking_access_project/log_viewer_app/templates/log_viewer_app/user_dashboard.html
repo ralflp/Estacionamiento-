@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ page_title|default:"Mi Portal" }}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 900px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
+        h1 { text-align: center; margin-bottom: 30px; }
+        h2 { border-bottom: 2px solid #007bff; padding-bottom: 5px; margin-top: 30px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        .empty-state { color: #777; font-style: italic; }
+        .welcome-message { margin-bottom: 20px; font-size: 1.1em; }
+        .status-activo { color: green; font-weight: bold; }
+        .status-inactivo { color: red; font-weight: bold; }
+        nav { margin-bottom: 20px; text-align: center; }
+        nav a { margin: 0 10px; color: #007bff; text-decoration: none; font-weight: bold; }
+        nav a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ page_title|default:"Mi Portal de Usuario" }}</h1>
+
+        {% if current_user.is_authenticated %}
+            <p class="welcome-message">Hola, <strong>{{ current_user.username }}</strong>.</p>
+
+            <nav>
+                <a href="{% url 'log_viewer_app:access_log_list' %}">Ver Registros de Acceso (Global)</a>
+                <!-- Añadir más enlaces relevantes aquí, e.g., a la gestión si es admin -->
+            </nav>
+
+            {% if person_profile %}
+                <h2>Mis Permisos de Acceso Activos/Futuros</h2>
+                {% if user_permissions %}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Punto de Acceso</th>
+                                <th>Estado</th>
+                                <th>Válido Desde</th>
+                                <th>Válido Hasta</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for perm in user_permissions %}
+                                <tr>
+                                    <td>{{ perm.access_point.name }}</td>
+                                    <td class="status-activo">Activo</td>
+                                    <td>{{ perm.valid_from|date:"Y-m-d H:i"|default:"N/A" }}</td>
+                                    <td>{{ perm.valid_until|date:"Y-m-d H:i"|default:"Sin caducidad" }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p class="empty-state">No tienes permisos de acceso activos o futuros asignados.</p>
+                {% endif %}
+
+                <h2>Mis Vehículos Registrados</h2>
+                {% if user_vehicles %}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Placa</th>
+                                <th>Descripción</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for vehicle in user_vehicles %}
+                                <tr>
+                                    <td>{{ vehicle.license_plate }}</td>
+                                    <td>{{ vehicle.description|default:"-" }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p class="empty-state">No tienes vehículos registrados.</p>
+                {% endif %}
+            {% else %}
+                <p class="empty-state">Tu usuario no está asociado a un perfil de persona en el sistema de acceso. Por favor, contacta al administrador.</p>
+            {% endif %}
+        {% else %}
+            <p>Por favor, <a href="{% url 'login' %}">inicia sesión</a> para ver tu portal.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

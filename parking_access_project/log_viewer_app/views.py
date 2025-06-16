@@ -1,6 +1,11 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from .models import AccessLog, Person, Vehicle, AccessPermission, ControlDevice
 from .forms import PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm
+from django.contrib.auth.decorators import login_required
+import logging
+from django.db.models import Q # Nueva importación para consultas complejas
+
+logger = logging.getLogger(__name__)
 
 # DRF Imports
 from rest_framework.views import APIView
@@ -13,9 +18,8 @@ from .serializers import (
     AccessRequestSerializer, AccessResponseSerializer,
     AccessPermissionSerializer
 )
-from .utils import verify_access_with_models # Suponiendo que está en utils.py
-# Person model already imported above
-from django.utils import timezone # Para el timestamp en AccessResponseSerializer
+from .utils import verify_access_with_models
+from django.utils import timezone
 
 
 # Django Template Views (existentes)
@@ -117,11 +121,46 @@ def control_device_update_view(request, pk):
     context = {'form': form, 'device': device, 'page_title': f'Editar Dispositivo: {device.name}'}
     return render(request, 'log_viewer_app/control_device_form.html', context)
 
+@login_required
+def user_dashboard_view(request):
+    user = request.user
+    person_profile = None
+    user_permissions = []
+    user_vehicles = []
+
+    try:
+        person_profile = Person.objects.get(user=user)
+        if person_profile:
+            now_date = timezone.now().date() # Use date for DateField comparison
+            user_permissions = AccessPermission.objects.filter(
+                person=person_profile,
+                is_active=True
+            ).filter(
+                Q(valid_until__isnull=True) | Q(valid_until__gte=now_date)
+            ).select_related('access_point').order_by('access_point__name')
+
+            user_vehicles = Vehicle.objects.filter(owner=person_profile).order_by('license_plate')
+
+    except Person.DoesNotExist:
+        pass
+    except Exception as e:
+        logger.error(f"Error buscando Person profile o datos relacionados para user {user.username}: {e}")
+        pass # person_profile, user_permissions, user_vehicles permanecerán None o vacíos
+
+    context = {
+        'current_user': user,
+        'person_profile': person_profile,
+        'user_permissions': user_permissions, # Nuevo
+        'user_vehicles': user_vehicles,     # Nuevo
+        'page_title': 'Mi Portal de Usuario'
+    }
+    return render(request, 'log_viewer_app/user_dashboard.html', context)
+
 
 # --- API Views ---
 
 class AccessVerificationAPIView(APIView):
-    permission_classes = [IsAuthenticated] # Asegura que solo clientes autenticados puedan usarla
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         serializer = AccessRequestSerializer(data=request.data)
@@ -146,13 +185,8 @@ class AccessVerificationAPIView(APIView):
                 'timestamp': timezone.now()
             }
             response_serializer = AccessResponseSerializer(data=response_data)
-            # We should always be able to serialize response_data if AccessResponseSerializer is defined correctly
-            if response_serializer.is_valid(raise_exception=True): # raise_exception helps debug if our data is bad
+            if response_serializer.is_valid(raise_exception=True):
                 return Response(response_serializer.data, status=status.HTTP_200_OK)
-            # The following lines are unlikely to be reached if raise_exception=True is used above
-            # and AccessResponseSerializer is correctly implemented.
-            # else:
-            #     return Response(response_serializer.errors, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -161,16 +195,12 @@ class UserPermissionsListAPIView(ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """
-        Esta vista debe devolver una lista de todos los permisos
-        para la persona asociada con el usuario actualmente autenticado.
-        """
         user = self.request.user
         try:
-            # Encontrar el perfil de Persona asociado al usuario de Django
-            # Se asume que el campo 'user' en el modelo Person es el OneToOneField al User de Django.
             person_profile = Person.objects.get(user=user)
-            return AccessPermission.objects.filter(person=person_profile).select_related('person', 'access_point').order_by('-valid_until')
+            # Para la API, podríamos querer mostrar todos los permisos, no solo los activos/futuros.
+            # O podríamos filtrarlos de manera similar al dashboard si esa es la intención.
+            # Por ahora, mostramos todos los asociados a la persona.
+            return AccessPermission.objects.filter(person=person_profile).select_related('person', 'access_point').order_by('-valid_until', 'access_point__name')
         except Person.DoesNotExist:
-            # Si no hay un perfil de Persona para este usuario de Django, no devolver permisos.
             return AccessPermission.objects.none()

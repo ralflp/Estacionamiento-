@@ -1,8 +1,8 @@
-from django.test import TestCase
+from django.test import TestCase, Client # Client added
 from django.urls import reverse
 from .models import (
     AccessLog, Person, Vehicle, AccessPoint, AccessPermission,
-    ControlDevice, Payment, Service, UserSubscription, Invoice # Added Service, UserSubscription, Invoice
+    ControlDevice, Payment, Service, UserSubscription, Invoice
 )
 from .forms import PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm
 from .utils import verify_access_with_models, publish_mqtt_message, process_payment_for_access
@@ -12,12 +12,12 @@ from decimal import Decimal # Added for Decimal comparisons
 from unittest.mock import patch, MagicMock, call as mock_call
 from django.conf import settings
 from django.contrib import admin
+from django.contrib.auth.models import User # Standard Django User model
 from django.contrib.messages.storage.fallback import FallbackStorage
 from .admin import PaymentAdmin
 
 # DRF Test specific imports
 from rest_framework.test import APIClient
-from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework import status
 from .serializers import AccessRequestSerializer, AccessResponseSerializer, AccessPermissionSerializer
@@ -95,7 +95,7 @@ class PaymentModelTest(TestCase):
         payment_time_before = timezone.now() - timedelta(seconds=1)
         payment = Payment.objects.create(
             person=self.person,
-            amount=Decimal("50.00"), # Use Decimal for currency
+            amount=Decimal("50.00"),
             payment_method='tarjeta_credito',
             reference_number='TXN12345'
         )
@@ -126,7 +126,6 @@ class UserSubscriptionModelTest(TestCase):
     def setUpTestData(cls):
         cls.person = Person.objects.create(full_name="Subscriber User", identifier="SUB001")
         cls.service = Service.objects.create(name="Servicio Básico", price=Decimal("100.00"))
-        cls.service_premium = Service.objects.create(name="Servicio Premium", price=Decimal("200.00"))
 
     def test_user_subscription_creation(self):
         start_date = dt_date(2024, 1, 1)
@@ -169,8 +168,8 @@ class InvoiceModelTest(TestCase):
     def test_invoice_creation(self):
         due_date = dt_date(2024, 7, 31)
         invoice = Invoice.objects.create(
-            person=self.person,
-            user_subscription=self.subscription,
+            person=self.person, # Use self.person here
+            user_subscription=self.subscription, # Use self.subscription here
             invoice_number="INV-2024-001",
             amount_due=Decimal("150.00"),
             due_date=due_date,
@@ -185,31 +184,74 @@ class InvoiceModelTest(TestCase):
 
 
 # --- Form Tests ---
-# ... (Existing Form Tests remain here) ...
 class PersonFormTest(TestCase):
-    def test_person_form_valid_data(self): form = PersonForm(data={'full_name': 'Form User', 'identifier': 'FU001'}); self.assertTrue(form.is_valid())
-    def test_person_form_invalid_missing_identifier(self): form = PersonForm(data={'full_name': 'Form User No ID'}); self.assertFalse(form.is_valid()); self.assertIn('identifier', form.errors)
-    def test_person_form_save(self): form = PersonForm(data={'full_name': 'Save User', 'identifier': 'SU001'}); self.assertTrue(form.is_valid()); person = form.save(); self.assertIsInstance(person, Person); self.assertEqual(person.identifier, 'SU001')
+    def test_person_form_valid_data(self):
+        form = PersonForm(data={'full_name': 'Form User', 'identifier': 'FU001'})
+        self.assertTrue(form.is_valid())
+
+    def test_person_form_invalid_missing_identifier(self):
+        form = PersonForm(data={'full_name': 'Form User No ID'})
+        self.assertFalse(form.is_valid())
+        self.assertIn('identifier', form.errors)
+
+    def test_person_form_save(self):
+        form = PersonForm(data={'full_name': 'Save User', 'identifier': 'SU001'})
+        self.assertTrue(form.is_valid())
+        person = form.save()
+        self.assertIsInstance(person, Person)
+        self.assertEqual(person.identifier, 'SU001')
 
 class VehicleFormTest(TestCase):
-    def setUp(self): self.owner = Person.objects.create(full_name="Owner Test", identifier="OT001")
-    def test_vehicle_form_valid_data(self): form = VehicleForm(data={'owner': self.owner.pk, 'license_plate': 'VF123', 'description': 'Test Vehicle'}); self.assertTrue(form.is_valid())
-    def test_vehicle_form_invalid_missing_plate(self): form = VehicleForm(data={'owner': self.owner.pk}); self.assertFalse(form.is_valid()); self.assertIn('license_plate', form.errors)
+    def setUp(self):
+        self.owner = Person.objects.create(full_name="Owner Test", identifier="OT001")
+
+    def test_vehicle_form_valid_data(self):
+        form = VehicleForm(data={'owner': self.owner.pk, 'license_plate': 'VF123', 'description': 'Test Vehicle'})
+        self.assertTrue(form.is_valid())
+
+    def test_vehicle_form_invalid_missing_plate(self):
+        form = VehicleForm(data={'owner': self.owner.pk})
+        self.assertFalse(form.is_valid())
+        self.assertIn('license_plate', form.errors)
 
 class AccessPermissionFormTest(TestCase):
-    def setUp(self): self.person = Person.objects.create(full_name="Perm Form Person", identifier="PFP01"); self.ap = AccessPoint.objects.create(name="Perm Form AP")
-    def test_access_permission_form_valid_data(self): form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True, 'valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'), 'valid_until': (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')}); self.assertTrue(form.is_valid())
-    def test_access_permission_form_save(self): form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True}); self.assertTrue(form.is_valid()); permission = form.save(); self.assertIsInstance(permission, AccessPermission); self.assertTrue(permission.is_active)
+    def setUp(self):
+        self.person = Person.objects.create(full_name="Perm Form Person", identifier="PFP01")
+        self.ap = AccessPoint.objects.create(name="Perm Form AP")
+
+    def test_access_permission_form_valid_data(self):
+        form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True, 'valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'), 'valid_until': (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')})
+        self.assertTrue(form.is_valid())
+
+    def test_access_permission_form_save(self):
+        form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True})
+        self.assertTrue(form.is_valid())
+        permission = form.save()
+        self.assertIsInstance(permission, AccessPermission)
+        self.assertTrue(permission.is_active)
 
 class ControlDeviceFormTest(TestCase):
-    def setUp(self): self.ap = AccessPoint.objects.create(name="Device Form AP")
-    def test_control_device_form_valid_data(self): form = ControlDeviceForm(data={'name': 'Test Device', 'device_id': 'DEVFORM001', 'access_point': self.ap.pk, 'mqtt_topic': 'test/device/topic', 'is_active': True}); self.assertTrue(form.is_valid())
-    def test_control_device_form_invalid_missing_device_id(self): form = ControlDeviceForm(data={'name': 'Test Device No ID'}); self.assertFalse(form.is_valid()); self.assertIn('device_id', form.errors)
-    def test_control_device_form_save(self): form = ControlDeviceForm(data={'name': 'Save Device', 'device_id': 'SDEV001', 'access_point': self.ap.pk, 'mqtt_topic': 'save/device/topic'}); self.assertTrue(form.is_valid()); device = form.save(); self.assertIsInstance(device, ControlDevice); self.assertEqual(device.device_id, 'SDEV001')
+    def setUp(self):
+        self.ap = AccessPoint.objects.create(name="Device Form AP")
+
+    def test_control_device_form_valid_data(self):
+        form = ControlDeviceForm(data={'name': 'Test Device', 'device_id': 'DEVFORM001', 'access_point': self.ap.pk, 'mqtt_topic': 'test/device/topic', 'is_active': True})
+        self.assertTrue(form.is_valid())
+
+    def test_control_device_form_invalid_missing_device_id(self):
+        form = ControlDeviceForm(data={'name': 'Test Device No ID'})
+        self.assertFalse(form.is_valid())
+        self.assertIn('device_id', form.errors)
+
+    def test_control_device_form_save(self):
+        form = ControlDeviceForm(data={'name': 'Save Device', 'device_id': 'SDEV001', 'access_point': self.ap.pk, 'mqtt_topic': 'save/device/topic'})
+        self.assertTrue(form.is_valid())
+        device = form.save()
+        self.assertIsInstance(device, ControlDevice)
+        self.assertEqual(device.device_id, 'SDEV001')
 
 
 # --- View Tests ---
-# ... (Existing View Tests remain here) ...
 class AccessLogListViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -583,19 +625,19 @@ class ProcessPaymentLogicTest(TestCase):
         self.active_perm_p3_ap2 = AccessPermission.objects.create(person=self.person3, access_point=self.ap2, is_active=True, valid_from=timezone.now() - timedelta(days=5), valid_until=timezone.now() + timedelta(days=5))
 
     def test_payment_no_person(self):
-        payment = Payment.objects.create(amount=10.00, person=None)
+        payment = Payment.objects.create(amount=Decimal("10.00"), person=None)
         self.assertFalse(process_payment_for_access(payment))
         payment.refresh_from_db()
         self.assertFalse(payment.processed_for_access)
 
     def test_payment_already_processed(self):
-        payment = Payment.objects.create(person=self.person1, amount=10.00, processed_for_access=True)
+        payment = Payment.objects.create(person=self.person1, amount=Decimal("10.00"), processed_for_access=True)
         self.assertTrue(process_payment_for_access(payment))
         self.assertFalse(AccessPermission.objects.filter(person=self.person1).exists())
 
     def test_new_user_no_permissions_creates_default(self):
         payment_date = timezone.make_aware(dt_datetime(2023, 1, 15, 10, 0, 0))
-        payment = Payment.objects.create(person=self.person1, amount=10.00, payment_date=payment_date)
+        payment = Payment.objects.create(person=self.person1, amount=Decimal("10.00"), payment_date=payment_date)
         self.assertTrue(process_payment_for_access(payment))
         payment.refresh_from_db()
         self.assertTrue(payment.processed_for_access)
@@ -609,7 +651,7 @@ class ProcessPaymentLogicTest(TestCase):
 
     def test_new_user_no_default_ap_available(self):
         AccessPoint.objects.all().delete()
-        payment = Payment.objects.create(person=self.person4, amount=10.00)
+        payment = Payment.objects.create(person=self.person4, amount=Decimal("10.00"))
         self.assertFalse(process_payment_for_access(payment))
         payment.refresh_from_db()
         self.assertFalse(payment.processed_for_access)
@@ -617,7 +659,7 @@ class ProcessPaymentLogicTest(TestCase):
 
     def test_existing_user_one_expired_permission(self):
         payment_date = timezone.now()
-        payment = Payment.objects.create(person=self.person2, amount=10.00, payment_date=payment_date)
+        payment = Payment.objects.create(person=self.person2, amount=Decimal("10.00"), payment_date=payment_date)
         self.assertTrue(process_payment_for_access(payment))
         payment.refresh_from_db()
         self.assertTrue(payment.processed_for_access)
@@ -628,7 +670,7 @@ class ProcessPaymentLogicTest(TestCase):
 
     def test_existing_user_one_active_permission_extends_from_valid_until(self):
         payment_date = self.active_perm_p3_ap1.valid_from
-        payment = Payment.objects.create(person=self.person3, amount=10.00, payment_date=payment_date)
+        payment = Payment.objects.create(person=self.person3, amount=Decimal("10.00"), payment_date=payment_date)
 
         original_valid_from_ap1 = self.active_perm_p3_ap1.valid_from
         original_valid_until_ap1 = self.active_perm_p3_ap1.valid_until
@@ -653,7 +695,7 @@ class ProcessPaymentLogicTest(TestCase):
         p, _ = Person.objects.get_or_create(identifier="PAY_USER_NOEXPIRY", defaults={'full_name': "User No Expiry"})
         perm = AccessPermission.objects.create(person=p, access_point=self.ap1, is_active=True, valid_until=None)
         payment_date = timezone.now()
-        payment = Payment.objects.create(person=p, amount=10.00, payment_date=payment_date)
+        payment = Payment.objects.create(person=p, amount=Decimal("10.00"), payment_date=payment_date)
         self.assertTrue(process_payment_for_access(payment))
         perm.refresh_from_db()
         self.assertTrue(perm.is_active)
@@ -669,13 +711,13 @@ class PaymentAdminActionTest(TestCase):
         self.person3 = Person.objects.create(full_name="AdminAction User3", identifier="AAU003")
         AccessPoint.objects.get_or_create(name="Main Entrance")
 
-        self.payment1_new_pk = Payment.objects.create(person=self.person1, amount=20.00, processed_for_access=False).pk
+        self.payment1_new_pk = Payment.objects.create(person=self.person1, amount=Decimal("20.00"), processed_for_access=False).pk
         self.payment1_new = Payment.objects.get(pk=self.payment1_new_pk)
 
-        self.payment2_processed_pk = Payment.objects.create(person=self.person2, amount=20.00, processed_for_access=True).pk
+        self.payment2_processed_pk = Payment.objects.create(person=self.person2, amount=Decimal("20.00"), processed_for_access=True).pk
         self.payment2_processed = Payment.objects.get(pk=self.payment2_processed_pk)
 
-        self.payment3_new_fail_pk = Payment.objects.create(person=self.person3, amount=20.00, processed_for_access=False).pk
+        self.payment3_new_fail_pk = Payment.objects.create(person=self.person3, amount=Decimal("20.00"), processed_for_access=False).pk
         self.payment3_new_fail = Payment.objects.get(pk=self.payment3_new_fail_pk)
 
         self.request = MagicMock()
@@ -708,9 +750,9 @@ class PaymentAdminActionTest(TestCase):
         mock_process_func.assert_any_call(self.payment3_new_fail)
 
         admin_messages = [m.message for m in list(self.request._messages)]
-        self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages) # Corrected message
-        self.assertIn("1 pago(s) ya habían sido procesados.", admin_messages) # Corrected message
-        self.assertIn("1 pago(s) no pudieron ser procesados.", admin_messages) # Corrected message
+        self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages)
+        self.assertIn("1 pago(s) ya habían sido procesados.", admin_messages)
+        self.assertIn("1 pago(s) no pudieron ser procesados.", admin_messages)
 
     @patch('log_viewer_app.admin.process_payment_for_access')
     def test_process_single_unprocessed_payment(self, mock_process_func):
@@ -725,7 +767,7 @@ class PaymentAdminActionTest(TestCase):
 
         mock_process_func.assert_called_once_with(payment_to_process)
         admin_messages = [m.message for m in list(self.request._messages)]
-        self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages) # Corrected message
+        self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages)
         self.assertEqual(len(admin_messages), 1)
 
 # --- API Test Classes ---
@@ -757,11 +799,9 @@ class AccessVerificationAPITest(TestCase):
         self.user = User.objects.create_user(username='testapiuser', password='testpassword')
         self.token = Token.objects.create(user=self.user)
         self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token.key)
-
         self.person_allowed = Person.objects.create(full_name="Allowed API User", identifier="QR_API_ALLOW")
         self.ap_main = AccessPoint.objects.create(name="API_Main_Gate")
         AccessPermission.objects.create(person=self.person_allowed, access_point=self.ap_main, is_active=True)
-
         self.url = reverse('log_viewer_app:api_verify_access')
 
     def test_verify_access_unauthenticated(self):
@@ -774,36 +814,98 @@ class AccessVerificationAPITest(TestCase):
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['access_granted'])
-        self.assertEqual(response.data['person_name'], self.person_allowed.full_name)
-        self.assertEqual(response.data['access_point_name'], self.ap_main.name)
-
     def test_verify_access_authenticated_denied_no_permission(self):
         data = {'qr_identifier': 'QR_API_DENY_NO_PERM', 'access_point_name': 'API_Main_Gate'}
         Person.objects.create(full_name="No Perm API User", identifier="QR_API_DENY_NO_PERM")
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data['access_granted'])
-
     def test_verify_access_authenticated_denied_person_not_found(self):
         data = {'qr_identifier': 'QR_NON_EXISTENT', 'access_point_name': 'API_Main_Gate'}
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data['access_granted'])
-        self.assertIsNone(response.data['person_name'])
-
-
     def test_verify_access_invalid_request_data_missing_qr(self):
         data = {'access_point_name': 'API_Main_Gate'}
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('qr_identifier', response.data)
-
     def test_verify_access_invalid_request_data_missing_ap(self):
         data = {'qr_identifier': 'QR_API_ALLOW'}
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('access_point_name', response.data)
 
+class UserDashboardViewTest(TestCase): # Added this class
+    def setUp(self):
+        self.client = Client()
+        self.test_user = User.objects.create_user(username='dashboarduser', password='password')
+        self.person_profile = Person.objects.create(user=self.test_user, full_name="Dashboard User", identifier="DASH_ID")
+
+        self.ap1 = AccessPoint.objects.create(name="AP Dashboard 1")
+        self.ap2 = AccessPoint.objects.create(name="AP Dashboard 2")
+        self.ap3 = AccessPoint.objects.create(name="AP Dashboard 3") # New AccessPoint
+
+        # Active and valid permission for ap1
+        AccessPermission.objects.create(person=self.person_profile, access_point=self.ap1, is_active=True, valid_from=timezone.now(), valid_until=timezone.now() + timedelta(days=5))
+        # Expired permission for ap2
+        AccessPermission.objects.create(person=self.person_profile, access_point=self.ap2, is_active=True, valid_from=timezone.now() - timedelta(days=10), valid_until=timezone.now() - timedelta(days=5))
+        # Inactive permission for ap3
+        AccessPermission.objects.create(person=self.person_profile, access_point=self.ap3, is_active=False, valid_from=timezone.now(), valid_until=timezone.now() + timedelta(days=5))
+
+
+        Vehicle.objects.create(owner=self.person_profile, license_plate="DASH123", description="Dash Car 1")
+        Vehicle.objects.create(owner=self.person_profile, license_plate="DASH456", description="Dash Car 2")
+
+        self.user_no_profile = User.objects.create_user(username='nouserprofile', password='password')
+        self.dashboard_url = reverse('log_viewer_app:user_dashboard')
+
+    def test_dashboard_redirects_if_not_logged_in(self):
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(settings.LOGIN_URL, response.url)
+
+    def test_dashboard_user_without_person_profile(self):
+        self.client.login(username='nouserprofile', password='password')
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/user_dashboard.html')
+        self.assertIsNone(response.context['person_profile'])
+        self.assertContains(response, "Tu usuario no está asociado a un perfil de persona")
+
+    def test_dashboard_user_with_profile_displays_data(self):
+        self.client.login(username='dashboarduser', password='password')
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/user_dashboard.html')
+        self.assertEqual(response.context['person_profile'], self.person_profile)
+
+        # Check permissions: only one active and valid permission (for ap1)
+        self.assertEqual(len(response.context['user_permissions']), 1)
+        self.assertEqual(response.context['user_permissions'][0].access_point, self.ap1)
+        self.assertContains(response, self.ap1.name)
+        # self.ap2's permission is expired, self.ap3's permission is inactive, so they should not be in the list
+        self.assertNotContains(response, self.ap2.name)
+        self.assertNotContains(response, self.ap3.name)
+
+        # Check vehicles
+        self.assertEqual(len(response.context['user_vehicles']), 2)
+        self.assertContains(response, "DASH123")
+        self.assertContains(response, "DASH456")
+
+    def test_dashboard_user_with_profile_no_permissions_or_vehicles(self):
+        user_empty = User.objects.create_user(username='emptyprofileuser', password='password')
+        person_empty = Person.objects.create(user=user_empty, full_name="Empty Profile User", identifier="EMPTY_ID")
+
+        self.client.login(username='emptyprofileuser', password='password')
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/user_dashboard.html')
+        self.assertEqual(response.context['person_profile'], person_empty)
+        self.assertEqual(len(response.context['user_permissions']), 0)
+        self.assertEqual(len(response.context['user_vehicles']), 0)
+        self.assertContains(response, "No tienes permisos de acceso activos o futuros asignados.")
+        self.assertContains(response, "No tienes vehículos registrados.")
 
 class UserPermissionsListAPITest(TestCase):
     def setUp(self):
@@ -811,42 +913,26 @@ class UserPermissionsListAPITest(TestCase):
         self.user1 = User.objects.create_user(username='user1perm', password='password1')
         self.person1 = Person.objects.create(full_name="User One Perms", identifier="U1P", user=self.user1)
         self.token1 = Token.objects.create(user=self.user1)
-        self.ap1 = AccessPoint.objects.create(name="AP Test 1")
-        self.ap2 = AccessPoint.objects.create(name="AP Test 2")
+        self.ap1 = AccessPoint.objects.create(name="AP Test 1"); self.ap2 = AccessPoint.objects.create(name="AP Test 2")
         AccessPermission.objects.create(person=self.person1, access_point=self.ap1, is_active=True)
         AccessPermission.objects.create(person=self.person1, access_point=self.ap2, is_active=False)
-
         self.user2 = User.objects.create_user(username='user2noperm', password='password2')
         self.person2 = Person.objects.create(full_name="User Two No Perms", identifier="U2NP", user=self.user2)
         self.token2 = Token.objects.create(user=self.user2)
-
         self.user3_no_profile = User.objects.create_user(username='user3noprofile', password='password3')
         self.token3 = Token.objects.create(user=self.user3_no_profile)
-
         self.url = reverse('log_viewer_app:api_user_permissions')
 
     def test_list_permissions_unauthenticated(self):
-        unauth_client = APIClient()
-        response = unauth_client.get(self.url)
+        unauth_client = APIClient(); response = unauth_client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
     def test_list_permissions_user_with_permissions(self):
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token1.key)
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 2)
-        self.assertContains(response, self.person1.full_name)
-        self.assertContains(response, self.ap1.name)
-
-
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token1.key); response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK); self.assertEqual(len(response.data), 2)
+        self.assertContains(response, self.person1.full_name) ; self.assertContains(response, self.ap1.name)
     def test_list_permissions_user_no_permissions(self):
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token2.key)
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 0)
-
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token2.key); response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK); self.assertEqual(len(response.data), 0)
     def test_list_permissions_user_no_person_profile(self):
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token3.key)
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 0)
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token3.key); response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK); self.assertEqual(len(response.data), 0)

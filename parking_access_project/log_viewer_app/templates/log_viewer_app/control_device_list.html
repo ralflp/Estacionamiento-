@@ -4,24 +4,35 @@
     <meta charset="UTF-8">
     <title>{{ page_title|default:"Lista de Dispositivos de Control" }}</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #007bff; color: white; }
         a { color: #007bff; text-decoration: none; }
         a:hover { text-decoration: underline; }
-        .container { max-width: 1000px; margin: auto; } /* Ancho aumentado */
+        .container { max-width: 1000px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; margin-bottom: 30px; color: #333; }
         .action-links { margin-bottom: 20px; }
-        .status-activo { color: green; }
-        .status-inactivo { color: red; }
+        .action-links a { margin-right: 10px; display: inline-block; margin-bottom: 5px;}
+        .status-activo { color: green; font-weight: bold; }
+        .status-inactivo { color: red; font-weight: bold; }
+        .empty-state { color: #777; font-style: italic; margin-top: 20px; }
+        .user-nav { margin-bottom: 15px; padding-bottom:10px; border-bottom: 1px solid #eee; text-align: right; }
+        .user-nav a { font-weight: bold; margin-left: 15px; }
     </style>
 </head>
 <body>
     <div class="container">
+        {% if user.is_authenticated %}
+            <div class="user-nav">
+                <a href="{% url 'log_viewer_app:user_dashboard' %}">Mi Portal</a>
+                <a href="{% url 'logout' %}">Cerrar Sesión</a>
+            </div>
+        {% endif %}
+
         <h1>{{ page_title|default:"Lista de Dispositivos de Control" }}</h1>
         <div class="action-links">
             <a href="{% url 'log_viewer_app:control_device_create' %}">Añadir Nuevo Dispositivo</a>
-            <br>
             <a href="{% url 'log_viewer_app:access_log_list' %}">Ver Registros de Acceso</a>
             <!-- Podrías añadir más enlaces a otras listas (personas, vehículos, permisos) si es útil -->
         </div>
@@ -56,7 +67,7 @@
                 </tbody>
             </table>
         {% else %}
-            <p>No hay dispositivos de control registrados todavía.</p>
+            <p class="empty-state">No hay dispositivos de control registrados todavía.</p>
         {% endif %}
     </div>
 </body>

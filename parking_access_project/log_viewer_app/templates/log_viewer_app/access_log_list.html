@@ -4,48 +4,63 @@
     <meta charset="UTF-8">
     <title>{{ page_title|default:"Registros de Acceso" }}</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        .permitido { color: green; }
-        .denegado { color: red; }
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 900px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; margin-bottom: 30px; color: #333; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        .permitido { color: green; font-weight: bold; }
+        .denegado { color: red; font-weight: bold; }
+        .empty-state { color: #777; font-style: italic; margin-top: 20px; }
+        .user-nav { margin-bottom: 15px; padding-bottom:10px; border-bottom: 1px solid #eee; text-align: right; }
+        .user-nav a { font-weight: bold; margin-left: 15px; color: #007bff; text-decoration: none; }
+        .user-nav a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
-    <h1>{{ page_title|default:"Registros de Acceso" }}</h1>
+    <div class="container">
+        {% if user.is_authenticated %}
+            <div class="user-nav">
+                <a href="{% url 'log_viewer_app:user_dashboard' %}">Mi Portal</a>
+                <a href="{% url 'logout' %}">Cerrar Sesión</a>
+            </div>
+        {% endif %}
 
-    {% if access_logs %}
-        <table>
-            <thead>
-                <tr>
-                    <th>Timestamp</th>
-                    <th>Datos del QR</th>
-                    <th>Acceso</th>
-                    <th>Tipo de Evento</th>
-                    <th>ID de Usuario</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for log in access_logs %}
+        <h1>{{ page_title|default:"Registros de Acceso" }}</h1>
+
+        {% if access_logs %}
+            <table>
+                <thead>
                     <tr>
-                        <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
-                        <td>{{ log.qr_data }}</td>
-                        <td class="{% if log.access_granted %}permitido{% else %}denegado{% endif %}">
-                            {% if log.access_granted %}
-                                Permitido
-                            {% else %}
-                                Denegado
-                            {% endif %}
-                        </td>
-                        <td>{{ log.event_type }}</td>
-                        <td>{{ log.user_id|default:"N/A" }}</td>
+                        <th>Timestamp</th>
+                        <th>Datos del QR</th>
+                        <th>Acceso</th>
+                        <th>Tipo de Evento</th>
+                        <th>ID de Usuario</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    {% else %}
-        <p>No hay registros de acceso para mostrar.</p>
-    {% endif %}
+                </thead>
+                <tbody>
+                    {% for log in access_logs %}
+                        <tr>
+                            <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                            <td>{{ log.qr_data }}</td>
+                            <td class="{% if log.access_granted %}permitido{% else %}denegado{% endif %}">
+                                {% if log.access_granted %}
+                                    Permitido
+                                {% else %}
+                                    Denegado
+                                {% endif %}
+                            </td>
+                            <td>{{ log.event_type }}</td>
+                            <td>{{ log.user_id|default:"N/A" }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p class="empty-state">No hay registros de acceso para mostrar.</p>
+        {% endif %}
+    </div>
 </body>
 </html>

@@ -1,6 +1,6 @@
 from django.urls import path
 from . import views
-from rest_framework.authtoken.views import obtain_auth_token # Nueva importación
+from rest_framework.authtoken.views import obtain_auth_token
 
 app_name = 'log_viewer_app'
 
@@ -18,8 +18,11 @@ urlpatterns = [
     path('control-devices/add/', views.control_device_create_view, name='control_device_create'),
     path('control-devices/<int:pk>/update/', views.control_device_update_view, name='control_device_update'),
 
+    # Nueva URL para el Portal de Usuario
+    path('portal/dashboard/', views.user_dashboard_view, name='user_dashboard'),
+
     # URLs para API Endpoints
     path('api/verify-access/', views.AccessVerificationAPIView.as_view(), name='api_verify_access'),
     path('api/user/permissions/', views.UserPermissionsListAPIView.as_view(), name='api_user_permissions'),
-    path('api/auth/token/', obtain_auth_token, name='api_auth_token'), # Nueva URL para obtener token
+    path('api/auth/token/', obtain_auth_token, name='api_auth_token'),
 ]
