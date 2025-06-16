@@ -1,15 +1,18 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from .models import AccessLog, Person, Vehicle, AccessPermission, ControlDevice, AccessPoint
+from .models import (
+    AccessLog, Person, Vehicle, AccessPermission, ControlDevice, AccessPoint,
+    UserSubscription, Invoice # UserSubscription e Invoice añadidos aquí
+)
 from .forms import (
     PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm,
-    GuestRegistrationForm # Nueva forma
+    GuestRegistrationForm
 )
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.models import Group # Nuevo para check de grupo
-from django.contrib import messages # Nuevo para mensajes al usuario
+from django.contrib.auth.models import Group
+from django.contrib import messages
 import logging
 from django.db.models import Q
-from django.utils import timezone # Ya estaba, pero asegurar para la nueva vista
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -124,16 +127,49 @@ def control_device_update_view(request, pk):
 
 @login_required
 def user_dashboard_view(request):
-    user = request.user; person_profile = None; user_permissions = []; user_vehicles = []
+    user = request.user
+    person_profile = None
+    user_permissions = []
+    user_vehicles = []
+    user_subscriptions = []
+    user_invoices = []
+
     try:
         person_profile = Person.objects.get(user=user)
         if person_profile:
             now_date = timezone.now().date()
-            user_permissions = AccessPermission.objects.filter(person=person_profile, is_active=True).filter(Q(valid_until__isnull=True) | Q(valid_until__gte=now_date)).select_related('access_point').order_by('access_point__name')
+            user_permissions = AccessPermission.objects.filter(
+                person=person_profile,
+                is_active=True
+            ).filter(
+                Q(valid_until__isnull=True) | Q(valid_until__gte=now_date)
+            ).select_related('access_point').order_by('access_point__name')
+
             user_vehicles = Vehicle.objects.filter(owner=person_profile).order_by('license_plate')
-    except Person.DoesNotExist: pass
-    except Exception as e: logger.error(f"Error buscando Person profile o datos para user {user.username}: {e}")
-    context = {'current_user': user, 'person_profile': person_profile, 'user_permissions': user_permissions, 'user_vehicles': user_vehicles, 'page_title': 'Mi Portal de Usuario'}
+
+            user_subscriptions = UserSubscription.objects.filter(
+                person=person_profile
+            ).select_related('service').order_by('service__name', '-start_date')
+
+            user_invoices = Invoice.objects.filter(
+                person=person_profile
+            ).select_related('user_subscription__service', 'person').order_by('-due_date', '-created_at')
+
+    except Person.DoesNotExist:
+        pass
+    except Exception as e:
+        logger.error(f"Error buscando Person profile o datos relacionados para user {user.username}: {e}")
+        pass
+
+    context = {
+        'current_user': user,
+        'person_profile': person_profile,
+        'user_permissions': user_permissions,
+        'user_vehicles': user_vehicles,
+        'user_subscriptions': user_subscriptions, # Nuevo
+        'user_invoices': user_invoices,         # Nuevo
+        'page_title': 'Mi Portal de Usuario'
+    }
     return render(request, 'log_viewer_app/user_dashboard.html', context)
 
 @login_required

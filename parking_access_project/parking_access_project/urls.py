@@ -19,6 +19,7 @@ from django.urls import path, include # Asegúrate de que 'include' esté import
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('accounts/', include('django.contrib.auth.urls')), # Para login, logout, etc.
     path('access/', include('log_viewer_app.urls')), # Incluye las URLs de tu app
     # Si quieres que la lista de logs sea la página principal del sitio,
     # podrías hacer algo como:

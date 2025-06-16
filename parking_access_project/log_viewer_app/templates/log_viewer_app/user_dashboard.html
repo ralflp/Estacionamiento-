@@ -12,7 +12,7 @@
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #007bff; color: white; }
-        .empty-state { color: #777; font-style: italic; }
+        .empty-state { color: #777; font-style: italic; margin-top: 15px; }
         .welcome-message { margin-bottom: 20px; font-size: 1.1em; }
         .status-activo { color: green; font-weight: bold; }
         .status-inactivo { color: red; font-weight: bold; }
@@ -30,7 +30,10 @@
 
             <nav>
                 <a href="{% url 'log_viewer_app:access_log_list' %}">Ver Registros de Acceso (Global)</a>
-                <!-- Añadir más enlaces relevantes aquí, e.g., a la gestión si es admin -->
+                <a href="{% url 'log_viewer_app:qr_scanner_page' %}">Escáner QR</a>
+                {% if perms.log_viewer_app.add_person %} {# Asumiendo que se configuran permisos para ver esto #}
+                    <a href="{% url 'log_viewer_app:guest_registration' %}">Registrar Invitado</a>
+                {% endif %}
             </nav>
 
             {% if person_profile %}
@@ -81,11 +84,85 @@
                 {% else %}
                     <p class="empty-state">No tienes vehículos registrados.</p>
                 {% endif %}
+
+                <h2>Mis Suscripciones</h2>
+                {% if user_subscriptions %}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Servicio</th>
+                                <th>Fecha de Inicio</th>
+                                <th>Fecha de Fin</th>
+                                <th>Ciclo de Facturación</th>
+                                <th>Precio</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for sub in user_subscriptions %}
+                                <tr>
+                                    <td>{{ sub.service.name }}</td>
+                                    <td>{{ sub.start_date|date:"Y-m-d" }}</td>
+                                    <td>{{ sub.end_date|date:"Y-m-d"|default:"Indefinida" }}</td>
+                                    <td>{{ sub.get_billing_cycle_display }}</td>
+                                    <td>${{ sub.get_effective_price|floatformat:2 }}</td>
+                                    <td class="{% if sub.is_active %}status-activo{% else %}status-inactivo{% endif %}">
+                                        {% if sub.is_active %}Activa{% else %}Inactiva{% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p class="empty-state">No tienes suscripciones registradas.</p>
+                {% endif %}
+
+                <h2>Mis Facturas</h2>
+                {% if user_invoices %}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Número de Factura</th>
+                                <th>Fecha de Emisión</th>
+                                <th>Fecha de Vencimiento</th>
+                                <th>Monto</th>
+                                <th>Estado</th>
+                                <th>Fecha de Pago</th>
+                                <th>Suscripción (Servicio)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for inv in user_invoices %}
+                                <tr>
+                                    <td>{{ inv.invoice_number }}</td>
+                                    <td>{{ inv.created_at|date:"Y-m-d" }}</td>
+                                    <td>{{ inv.due_date|date:"Y-m-d" }}</td>
+                                    <td>${{ inv.amount_due|floatformat:2 }}</td>
+                                    <td>{{ inv.get_status_display }}</td>
+                                    <td>{{ inv.paid_date|date:"Y-m-d"|default:"No pagada" }}</td>
+                                    <td>
+                                        {% if inv.user_subscription %}
+                                            {{ inv.user_subscription.service.name }}
+                                        {% else %}
+                                            N/A
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p class="empty-state">No tienes facturas generadas.</p>
+                {% endif %}
+
             {% else %}
                 <p class="empty-state">Tu usuario no está asociado a un perfil de persona en el sistema de acceso. Por favor, contacta al administrador.</p>
             {% endif %}
+            <div style="margin-top: 30px; text-align: center;">
+                 <a href="{% url 'logout' %}">Cerrar Sesión</a>
+            </div>
         {% else %}
-            <p>Por favor, <a href="{% url 'login' %}">inicia sesión</a> para ver tu portal.</p>
+            <p>Por favor, <a href="{% url 'login' %}?next={{ request.path|urlencode }}">inicia sesión</a> para ver tu portal.</p>
         {% endif %}
     </div>
 </body>
