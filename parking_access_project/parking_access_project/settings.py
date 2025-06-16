@@ -125,6 +125,9 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Custom application settings
+INVOICE_DUE_DAYS = 15 # Default number of days an invoice is due after generation
+
 # MQTT Broker Settings
 MQTT_BROKER_HOST = 'localhost'  # O la IP/hostname de tu broker MQTT
 MQTT_BROKER_PORT = 1883

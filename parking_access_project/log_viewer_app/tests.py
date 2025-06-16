@@ -9,8 +9,9 @@ from .forms import (
     GuestRegistrationForm
 )
 from .utils import verify_access_with_models, publish_mqtt_message, process_payment_for_access
+from .billing_utils import generate_invoice_for_subscription, generate_all_due_invoices, get_due_cycle_start_date_for_subscription # Import the new function
 from django.utils import timezone
-from datetime import timedelta, date as dt_date, datetime as dt_datetime
+from datetime import timedelta, date as dt_date, datetime as dt_datetime, date
 from decimal import Decimal
 from unittest.mock import patch, MagicMock, call as mock_call
 from django.conf import settings
@@ -24,6 +25,10 @@ from rest_framework.test import APIClient
 from rest_framework.authtoken.models import Token
 from rest_framework import status
 from .serializers import AccessRequestSerializer, AccessResponseSerializer, AccessPermissionSerializer
+
+# For management command testing
+from io import StringIO
+from django.core.management import call_command
 
 
 # --- Model Tests ---
@@ -815,3 +820,455 @@ class QRScannerPageViewTest(TestCase):
         self.assertTrue(Token.objects.filter(user=new_user).exists())
         new_token = Token.objects.get(user=new_user)
         self.assertEqual(response.context['user_auth_token'], new_token.key)
+
+# --- Billing Utils Tests ---
+class BillingUtilsTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.person1 = Person.objects.create(full_name="Bill Utils User", identifier="BUU001")
+        cls.service1 = Service.objects.create(name="Bill Utils Service", price=Decimal("10.00"))
+        cls.subscription1 = UserSubscription.objects.create(
+            person=cls.person1,
+            service=cls.service1,
+            start_date=dt_date(2023, 1, 1),
+            billing_cycle_anchor_day=15,
+            is_active=True
+        )
+
+    def test_generate_invoice_for_active_subscription(self):
+        cycle_date = date(2023, 1, 15) # Use direct 'date'
+        invoice, created = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertTrue(created)
+        self.assertIsNotNone(invoice)
+        self.assertEqual(invoice.person, self.person1)
+        self.assertEqual(invoice.user_subscription, self.subscription1)
+        self.assertEqual(invoice.amount_due, self.service1.price)
+        self.assertEqual(invoice.status, 'pending')
+        self.assertEqual(invoice.invoice_number, f"SUB-{self.subscription1.pk}-{cycle_date.strftime('%Y%m%d')}")
+        self.assertEqual(invoice.due_date, cycle_date + timedelta(days=settings.INVOICE_DUE_DAYS))
+
+    def test_generate_invoice_for_inactive_subscription(self):
+        self.subscription1.is_active = False
+        self.subscription1.save()
+        cycle_date = date(2023, 1, 15)
+        invoice, created = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertFalse(created)
+        self.assertIsNone(invoice)
+        self.assertFalse(Invoice.objects.filter(user_subscription=self.subscription1, cycle_start_date=cycle_date).exists())
+
+    def test_generate_invoice_duplicate_avoidance(self):
+        cycle_date = date(2023, 1, 15)
+        invoice1, created1 = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertTrue(created1)
+        self.assertIsNotNone(invoice1)
+
+        invoice2, created2 = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertFalse(created2) # Should not be newly created
+        self.assertIsNotNone(invoice2)
+        self.assertEqual(invoice1.pk, invoice2.pk)
+        self.assertEqual(Invoice.objects.filter(user_subscription=self.subscription1, cycle_start_date=cycle_date).count(), 1)
+
+    def test_generate_invoice_uses_price_override(self):
+        self.subscription1.price_override = Decimal("8.88")
+        self.subscription1.save()
+        cycle_date = date(2023, 1, 15)
+        invoice, created = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertTrue(created)
+        self.assertIsNotNone(invoice)
+        self.assertEqual(invoice.amount_due, Decimal("8.88"))
+
+    def test_generate_invoice_correct_due_date(self):
+        cycle_date = date(2023, 1, 15)
+        invoice, created = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertTrue(created)
+        self.assertIsNotNone(invoice)
+        expected_due_date = cycle_date + timedelta(days=settings.INVOICE_DUE_DAYS)
+        self.assertEqual(invoice.due_date, expected_due_date)
+
+    def test_generate_invoice_respects_subscription_start_date(self):
+        cycle_date = self.subscription1.start_date - timedelta(days=1)
+        invoice, created = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertFalse(created)
+        self.assertIsNone(invoice, "Invoice should not be generated if cycle date is before subscription start date.")
+
+    def test_generate_invoice_respects_subscription_end_date(self):
+        self.subscription1.end_date = date(2023, 1, 31)
+        self.subscription1.save()
+        cycle_date = self.subscription1.end_date + timedelta(days=1)
+        invoice, created = generate_invoice_for_subscription(self.subscription1, cycle_date)
+        self.assertFalse(created)
+        self.assertIsNone(invoice, "Invoice should not be generated if cycle date is after subscription end date.")
+
+# --- Management Command Tests ---
+
+# Test class for the new get_due_cycle_start_date_for_subscription utility
+class GetDueCycleStartDateUtilTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.person = Person.objects.create(full_name="Cycle Test User", identifier="CYCLEU1")
+        cls.service_monthly = Service.objects.create(name="Cycle Monthly Service", price=Decimal("50.00"))
+        cls.service_once = Service.objects.create(name="Cycle One-Time Service", price=Decimal("200.00"))
+
+        # Monthly subscription starting a while ago
+        cls.sub_monthly = UserSubscription.objects.create(
+            person=cls.person, service=cls.service_monthly, start_date=date(2023, 1, 10),
+            billing_cycle='monthly', billing_cycle_anchor_day=10, is_active=True
+        )
+        Invoice.objects.create( # Last invoice was for March 10, 2023
+            person=cls.person, user_subscription=cls.sub_monthly, cycle_start_date=date(2023, 3, 10),
+            invoice_number="INV-MARCH", amount_due=Decimal("50.00"), due_date=date(2023, 3, 25)
+        )
+
+        # One-time subscription, not yet invoiced
+        cls.sub_once_new = UserSubscription.objects.create(
+            person=cls.person, service=cls.service_once, start_date=date(2023, 4, 1),
+            billing_cycle='once', billing_cycle_anchor_day=5, is_active=True # Anchor day for 'once' is less common but possible
+        )
+
+        # One-time subscription, already invoiced (logic implies this shouldn't be re-calculated as due by this func)
+        cls.sub_once_billed = UserSubscription.objects.create(
+            person=cls.person, service=cls.service_once, start_date=date(2023, 2, 1),
+            billing_cycle='once', billing_cycle_anchor_day=5, is_active=True
+        )
+        Invoice.objects.create(
+            person=cls.person, user_subscription=cls.sub_once_billed, cycle_start_date=date(2023, 2, 1),
+            invoice_number="INV-ONCE-BILLED", amount_due=Decimal("200.00"), due_date=date(2023, 2, 16)
+        )
+
+        # Monthly subscription, but next cycle is past its end_date
+        cls.sub_monthly_ended = UserSubscription.objects.create(
+            person=cls.person, service=cls.service_monthly, start_date=date(2023, 1, 20),
+            end_date=date(2023, 3, 20), # Ends March 20
+            billing_cycle='monthly', billing_cycle_anchor_day=20, is_active=True
+        )
+        Invoice.objects.create( # Last invoice Feb 20
+            person=cls.person, user_subscription=cls.sub_monthly_ended, cycle_start_date=date(2023, 2, 20),
+            invoice_number="INV-FEB-ENDED", amount_due=Decimal("50.00"), due_date=date(2023, 3, 7)
+        ) # Next cycle would be Mar 20, but it ends on Mar 20. Should still be Mar 20.
+           # If next cycle is Apr 20, it should be None.
+
+        # Subscription with no anchor day (should use start_date for first cycle calc for recurring)
+        cls.sub_monthly_no_anchor = UserSubscription.objects.create(
+            person=cls.person, service=cls.service_monthly, start_date=date(2023, 4, 5),
+            billing_cycle='monthly', billing_cycle_anchor_day=None, is_active=True
+        )
+
+
+    def test_monthly_next_cycle_due(self):
+        # Last invoice Mar 10, as_of_date Apr 10 -> next cycle is Apr 10
+        as_of_date = date(2023, 4, 10)
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_monthly, as_of_date)
+        self.assertEqual(due_date, date(2023, 4, 10))
+
+    def test_monthly_next_cycle_not_yet_due(self):
+        # Last invoice Mar 10, as_of_date Apr 5 -> next cycle Apr 10 is not yet due
+        as_of_date = date(2023, 4, 5)
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_monthly, as_of_date)
+        self.assertIsNone(due_date)
+
+    def test_monthly_first_invoice_due(self):
+        sub_new_monthly = UserSubscription.objects.create(
+            person=self.person, service=self.service_monthly, start_date=date(2023, 3, 15),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True
+        )
+        as_of_date = date(2023, 3, 15)
+        # Logic: first_cycle_candidate = 2023-03-15.replace(day=15) = 2023-03-15. <= as_of_date.
+        due_date = get_due_cycle_start_date_for_subscription(sub_new_monthly, as_of_date)
+        self.assertEqual(due_date, date(2023, 3, 15))
+
+    def test_monthly_first_invoice_anchor_passed_in_start_month(self):
+        # Starts Mar 20, anchor day is 15. First invoice should be Apr 15.
+        sub_anchor_passed = UserSubscription.objects.create(
+            person=self.person, service=self.service_monthly, start_date=date(2023, 3, 20),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True
+        )
+        as_of_date_apr_15 = date(2023, 4, 15)
+        # Logic: first_cycle_candidate = 2023-03-20.replace(day=15) = 2023-03-15. < start_date. So add 1 month = 2023-04-15.
+        due_date = get_due_cycle_start_date_for_subscription(sub_anchor_passed, as_of_date_apr_15)
+        self.assertEqual(due_date, date(2023, 4, 15))
+
+        as_of_date_mar_15 = date(2023, 3, 15) # Too early
+        due_date_early = get_due_cycle_start_date_for_subscription(sub_anchor_passed, as_of_date_mar_15)
+        self.assertIsNone(due_date_early)
+
+
+    def test_once_new_is_due(self):
+        # sub_once_new starts Apr 1. as_of_date Apr 5.
+        as_of_date = date(2023, 4, 5)
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_once_new, as_of_date)
+        self.assertEqual(due_date, self.sub_once_new.start_date) # Should be start_date
+
+    def test_once_new_is_not_yet_due(self):
+        # sub_once_new starts Apr 1. as_of_date Mar 30.
+        as_of_date = date(2023, 3, 30)
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_once_new, as_of_date)
+        self.assertIsNone(due_date)
+
+    def test_once_already_billed_returns_its_start_date_if_no_invoice_check(self):
+        # This function DOES NOT check for existing invoices. So it will return its start date.
+        as_of_date = date(2023, 2, 5) # After start date of sub_once_billed
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_once_billed, as_of_date)
+        self.assertEqual(due_date, self.sub_once_billed.start_date)
+
+    def test_monthly_ended_before_next_cycle(self):
+        # sub_monthly_ended: last billed Feb 20. Ends Mar 20. Next cycle Mar 20.
+        # as_of_date Mar 20. Should be due for Mar 20.
+        as_of_date_mar_20 = date(2023, 3, 20)
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_monthly_ended, as_of_date_mar_20)
+        self.assertEqual(due_date, date(2023, 3, 20))
+
+        # as_of_date Apr 20. Next cycle would be Apr 20, but sub ended Mar 20. So, None.
+        as_of_date_apr_20 = date(2023, 4, 20)
+        due_date_after_end = get_due_cycle_start_date_for_subscription(self.sub_monthly_ended, as_of_date_apr_20)
+        self.assertIsNone(due_date_after_end)
+
+    def test_inactive_subscription_returns_none(self):
+        as_of_date = date(2023, 1, 15)
+        self.sub_monthly.is_active = False; self.sub_monthly.save()
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_monthly, as_of_date)
+        self.assertIsNone(due_date)
+        self.sub_monthly.is_active = True; self.sub_monthly.save() # revert
+
+    def test_monthly_no_anchor_day(self):
+        # sub_monthly_no_anchor starts Apr 5, no anchor day.
+        # First cycle candidate should be its start_date.
+        as_of_date = date(2023, 4, 5)
+        due_date = get_due_cycle_start_date_for_subscription(self.sub_monthly_no_anchor, as_of_date)
+        self.assertEqual(due_date, date(2023, 4, 5))
+
+        # Check next month if already invoiced for start_date
+        Invoice.objects.create(
+            person=self.person, user_subscription=self.sub_monthly_no_anchor, cycle_start_date=date(2023, 4, 5),
+            invoice_number="INV-NOANCHOR-APR", amount_due=Decimal("50.00"), due_date=date(2023, 4, 20)
+        )
+        as_of_date_may = date(2023, 5, 5)
+        due_date_may = get_due_cycle_start_date_for_subscription(self.sub_monthly_no_anchor, as_of_date_may)
+        self.assertEqual(due_date_may, date(2023, 5, 5))
+
+
+# Tests for the refactored generate_all_due_invoices utility
+class GenerateAllDueInvoicesUtilTest(TestCase):
+    @classmethod
+    def setUpTestData(cls): # Keep this setup, it's good for generate_all_due_invoices
+        cls.person1 = Person.objects.create(full_name="Util Test User 1", identifier="UTILU1")
+        cls.person2 = Person.objects.create(full_name="Util Test User 2", identifier="UTILU2")
+        cls.service_monthly = Service.objects.create(name="Monthly Service Util", price=Decimal("30.00"))
+        cls.service_once = Service.objects.create(name="One-Time Service Util", price=Decimal("100.00"))
+
+        # Sub 1: Monthly, active, anchor day matches as_of_date, first invoice due on as_of_date_test (Feb 15)
+        cls.sub1_monthly_new = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_monthly, start_date=date(2023, 2, 1), # Start Feb 1
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True # Anchor 15th
+        )
+
+        # Sub 2: Monthly, active, anchor day matches, with a prior invoice (next cycle due on as_of_date_test)
+        cls.sub2_monthly_recurring = UserSubscription.objects.create(
+            person=cls.person2, service=cls.service_monthly, start_date=date(2023, 1, 1), # Started earlier
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True
+        )
+        Invoice.objects.create( # Prior invoice for sub2 on Jan 15
+            person=cls.person2, user_subscription=cls.sub2_monthly_recurring, cycle_start_date=date(2023, 1, 15),
+            invoice_number="PREV-SUB2-20230115", amount_due=Decimal("30.00"), due_date=date(2023, 1, 30)
+        ) # Expecting Feb 15 invoice
+
+        # Sub 3: Monthly, active, anchor day does NOT match as_of_date
+        cls.sub3_monthly_wrong_anchor = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_monthly, start_date=date(2023, 1, 1), # Will not be processed on Feb 15
+            billing_cycle='monthly', billing_cycle_anchor_day=16, is_active=True
+        )
+
+        # Sub 4: One-time, active, not yet invoiced, anchor day matches as_of_date_test (Feb 15)
+        # Its cycle_start_for_invoice will be its start_date.
+        cls.sub4_once_new = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_once, start_date=date(2023, 2, 10),
+            billing_cycle='once', billing_cycle_anchor_day=15, is_active=True
+        )
+
+        # Sub 5: One-time, active, already invoiced (start_date was Jan 5, anchor 15th - so it was due on Jan 15th for its start_date)
+        # This setup is a bit complex for "already invoiced one-time".
+        # A one-time invoice is typically for its start_date. If anchor_day is different, it means it's due on the first anchor_day
+        # on or after its start_date.
+        # Let's simplify: sub5_once_existing's start_date *is* its cycle_start_date.
+        cls.sub5_once_existing = UserSubscription.objects.create(
+            person=cls.person2, service=cls.service_once, start_date=date(2023, 1, 15),
+            billing_cycle='once', billing_cycle_anchor_day=15, is_active=True
+        )
+        Invoice.objects.create(
+            person=cls.person2, user_subscription=cls.sub5_once_existing, cycle_start_date=cls.sub5_once_existing.start_date,
+            invoice_number="PREV-SUB5-20230115", amount_due=Decimal("100.00"), due_date=date(2023, 1, 30)
+        )
+
+        # Sub 6: Monthly, active, anchor day matches, but next cycle (Mar 15) is in the future from as_of_date_test (Feb 15)
+        cls.sub6_monthly_future_cycle = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_monthly, start_date=date(2023, 2, 1),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True
+        )
+        Invoice.objects.create( # Invoice for Feb 15 already exists
+            person=cls.person1, user_subscription=cls.sub6_monthly_future_cycle, cycle_start_date=date(2023, 2, 15),
+            invoice_number="PREV-SUB6-20230215", amount_due=Decimal("30.00"), due_date=date(2023, 3, 2)
+        ) # So, next cycle is Mar 15, which is after as_of_date_test (Feb 15)
+
+        # Sub 7: Inactive subscription, anchor day matches - should be ignored by main query
+        cls.sub7_inactive = UserSubscription.objects.create(
+            person=cls.person2, service=cls.service_monthly, start_date=date(2023, 1, 1),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=False
+        )
+
+        # Sub 8: Subscription with billing_cycle_anchor_day = None - should be skipped and counted in failed/skipped
+        cls.sub8_no_anchor = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_monthly, start_date=date(2023, 1, 1),
+            billing_cycle='monthly', billing_cycle_anchor_day=None, is_active=True
+        )
+
+    @patch('log_viewer_app.billing_utils.generate_invoice_for_subscription') # Mock the lower-level invoice creation
+    @patch('log_viewer_app.billing_utils.get_due_cycle_start_date_for_subscription') # Mock the helper we are indirectly testing via generate_all_due_invoices
+    def test_generate_all_due_invoices_orchestration(self, mock_get_due_cycle_date, mock_generate_invoice):
+        as_of_date_test = date(2023, 2, 15)
+
+        # Define behavior for mock_get_due_cycle_date
+        def get_due_date_side_effect(subscription, as_of_date_arg):
+            if as_of_date_arg != as_of_date_test: return None # Should always be called with as_of_date_test
+            if subscription == self.sub1_monthly_new: return date(2023, 2, 15)
+            if subscription == self.sub2_monthly_recurring: return date(2023, 2, 15)
+            if subscription == self.sub4_once_new: return self.sub4_once_new.start_date
+            if subscription == self.sub5_once_existing: return self.sub5_once_existing.start_date
+            # sub3_monthly_wrong_anchor: get_due_cycle_start_date_for_subscription would return a date,
+            # but generate_all_due_invoices filters by anchor day first. So it won't be called for sub3.
+            # sub6_monthly_future_cycle: get_due_cycle_start_date_for_subscription would return None (next cycle Mar 15)
+            if subscription == self.sub6_monthly_future_cycle: return None
+            return None # Default for others not explicitly handled (like sub7_inactive, sub8_no_anchor - though they are filtered earlier)
+        mock_get_due_cycle_date.side_effect = get_due_date_side_effect
+
+        # Define behavior for mock_generate_invoice
+        mock_invoice_sub1 = MagicMock(spec=Invoice); mock_invoice_sub1.invoice_number = "INV_SUB1"
+        mock_invoice_sub2 = MagicMock(spec=Invoice); mock_invoice_sub2.invoice_number = "INV_SUB2"
+        mock_invoice_sub4 = MagicMock(spec=Invoice); mock_invoice_sub4.invoice_number = "INV_SUB4"
+        # For sub5, an actual invoice exists, so generate_invoice_for_subscription should return that and created=False
+        actual_invoice_sub5 = Invoice.objects.get(user_subscription=self.sub5_once_existing)
+
+        def generate_invoice_side_effect(subscription, cycle_start_date):
+            if subscription == self.sub1_monthly_new: return mock_invoice_sub1, True
+            if subscription == self.sub2_monthly_recurring: return mock_invoice_sub2, True
+            if subscription == self.sub4_once_new: return mock_invoice_sub4, True
+            if subscription == self.sub5_once_existing: return actual_invoice_sub5, False # Already exists
+            return None, False
+        mock_generate_invoice.side_effect = generate_invoice_side_effect
+
+        new_gen, existed, failed_skipped = generate_all_due_invoices(as_of_date=as_of_date_test)
+
+        # Assertions
+        # generate_all_due_invoices filters by anchor day first.
+        # Expected calls to get_due_cycle_start_date_for_subscription:
+        # sub1 (anchor 15 - yes), sub2 (anchor 15 - yes), sub4 (anchor 15 - yes),
+        # sub5 (anchor 15 - yes), sub6 (anchor 15 - yes)
+        # sub3 (anchor 16 - no), sub7 (inactive - no by main query), sub8 (no anchor - skip, fail count incremented)
+        self.assertEqual(mock_get_due_cycle_date.call_count, 5) # sub1, sub2, sub4, sub5, sub6
+
+        # Expected calls to generate_invoice_for_subscription (based on get_due_cycle_date side_effect):
+        # sub1 (returns date), sub2 (returns date), sub4 (returns date), sub5 (returns date)
+        # sub6 (get_due_cycle_date returns None for it)
+        self.assertEqual(mock_generate_invoice.call_count, 4)
+        mock_generate_invoice.assert_any_call(self.sub1_monthly_new, date(2023, 2, 15))
+        mock_generate_invoice.assert_any_call(self.sub2_monthly_recurring, date(2023, 2, 15))
+        mock_generate_invoice.assert_any_call(self.sub4_once_new, self.sub4_once_new.start_date)
+        mock_generate_invoice.assert_any_call(self.sub5_once_existing, self.sub5_once_existing.start_date)
+
+        self.assertEqual(new_gen, 3, "Should be 3 newly generated invoices (sub1, sub2, sub4)")
+        self.assertEqual(existed, 1, "Should be 1 existing invoice (sub5)")
+        self.assertEqual(failed_skipped, 1, "Should be 1 failed/skipped (sub8_no_anchor due to no anchor day)")
+
+
+# Refactored command test
+class GeneratePeriodicInvoicesCommandTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        # Minimal setup, as the utility function is tested separately.
+        # We just need to ensure the command can run.
+        # No specific subscriptions needed here if we are mocking generate_all_due_invoices
+        pass
+
+    @patch('log_viewer_app.management.commands.generate_periodic_invoices.generate_all_due_invoices')
+    @patch('log_viewer_app.management.commands.generate_periodic_invoices.timezone')
+    def test_command_calls_utility_and_reports(self, mock_timezone, mock_generate_all):
+        mock_today = date(2023, 3, 20)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+
+        # Define what the mocked utility function will return
+        mock_generate_all.return_value = (2, 1, 0) # 2 new, 1 existed, 0 failed
+
+        out = StringIO()
+        call_command('generate_periodic_invoices', stdout=out)
+
+        # Verify generate_all_due_invoices was called correctly
+        mock_generate_all.assert_called_once_with(as_of_date=mock_today)
+
+        # Verify command output
+        output = out.getvalue()
+        self.assertIn("Iniciando generación de facturas periódicas...", output)
+        self.assertIn("Se generaron 2 nueva(s) factura(s).", output)
+        self.assertIn("1 factura(s) ya existían para el ciclo actual y fueron omitidas.", output)
+        self.assertNotIn("suscripciones fueron omitidas o fallaron", output) # 0 failed
+        self.assertIn("Proceso de generación de facturas periódicas completado.", output)
+
+    @patch('log_viewer_app.management.commands.generate_periodic_invoices.generate_all_due_invoices')
+    @patch('log_viewer_app.management.commands.generate_periodic_invoices.timezone')
+    def test_command_reports_no_new_invoices(self, mock_timezone, mock_generate_all):
+        mock_today = date(2023, 3, 21)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+        mock_generate_all.return_value = (0, 0, 0) # No invoices generated or failed
+
+        # Mock UserSubscription.objects.filter().count() for the specific message
+        with patch('log_viewer_app.management.commands.generate_periodic_invoices.UserSubscription.objects.filter') as mock_filter:
+            mock_filter.return_value.count.return_value = 5 # Simulate 5 active subs
+
+            out = StringIO()
+            call_command('generate_periodic_invoices', stdout=out)
+
+            mock_generate_all.assert_called_once_with(as_of_date=mock_today)
+            output = out.getvalue()
+            self.assertNotIn("nueva(s) factura(s)", output)
+            self.assertNotIn("ya existían", output)
+            self.assertIn("No hay facturas debidas para generar en este momento según los días de anclaje y ciclos.", output)
+
+    @patch('log_viewer_app.management.commands.generate_periodic_invoices.generate_all_due_invoices')
+    @patch('log_viewer_app.management.commands.generate_periodic_invoices.timezone')
+    def test_command_reports_no_active_subscriptions(self, mock_timezone, mock_generate_all):
+        mock_today = date(2023, 3, 22)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+        mock_generate_all.return_value = (0, 0, 0)
+
+        with patch('log_viewer_app.management.commands.generate_periodic_invoices.UserSubscription.objects.filter') as mock_filter:
+            mock_filter.return_value.count.return_value = 0 # Simulate 0 active subs
+
+            out = StringIO()
+            call_command('generate_periodic_invoices', stdout=out)
+
+            mock_generate_all.assert_called_once_with(as_of_date=mock_today)
+            output = out.getvalue()
+            self.assertIn("No hay suscripciones activas para facturar.", output)
+
+
+    # Old tests for GeneratePeriodicInvoicesCommandTest are removed as they tested
+    # the direct invoice generation logic which is now in generate_all_due_invoices
+    # and tested by GenerateAllDueInvoicesUtilTest.
+
+    # @patch('log_viewer_app.management.commands.generate_periodic_invoices.timezone')
+    # def test_command_generates_invoices_correctly(self, mock_timezone):
+    #     ...
+    # @patch('log_viewer_app.management.commands.generate_periodic_invoices.timezone')
+    # def test_command_handles_existing_invoice(self, mock_timezone):
+    #     ...
+    # @patch('log_viewer_app.management.commands.generate_periodic_invoices.timezone')
+    # def test_command_no_active_subscriptions(self, mock_timezone):
+    #     ...
+    # @patch('log_viewer_app.management.commands.generate_periodic_invoices.timezone')
+    # def test_command_output_contains_summary(self, mock_timezone):
+    #     ...
+
+# Old BillingUtilsTest might need to be removed or heavily adapted if generate_all_due_invoices
+# is the primary public interface now. The existing BillingUtilsTest tests generate_invoice_for_subscription.
+# It should remain to test that lower-level function.
+# The prompt asks to "Update Pruebas Unitarias", implying modifying existing ones and adding new ones.
+# BillingUtilsTest (for generate_invoice_for_subscription) remains valid for the lower-level function.
+
+# The OldGeneratePeriodicInvoicesCommandTest class is now removed.

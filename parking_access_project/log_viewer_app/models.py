@@ -109,6 +109,10 @@ class UserSubscription(models.Model):
     start_date = models.DateField(default=timezone.now, help_text="Fecha de inicio de la suscripción")
     end_date = models.DateField(null=True, blank=True, help_text="Fecha de fin de la suscripción (opcional)")
     billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='monthly', help_text="Ciclo de facturación")
+    billing_cycle_anchor_day = models.PositiveSmallIntegerField(
+        null=True, blank=True, default=1,
+        help_text="Día del mes para el anclaje de facturación (e.g., 1, 15, 28). Usado para determinar cuándo generar la factura en ciclos periódicos."
+    )
     price_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Precio especial para esta suscripción")
     is_active = models.BooleanField(default=True, help_text="Indica si esta suscripción está actualmente activa")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -128,6 +132,7 @@ class Invoice(models.Model):
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name='invoices', help_text="Persona a la que se emite la factura")
     user_subscription = models.ForeignKey(UserSubscription, on_delete=models.SET_NULL, null=True, blank=True, related_name='invoices', help_text="Suscripción asociada a esta factura (opcional)")
     invoice_number = models.CharField(max_length=50, unique=True, help_text="Número de factura único")
+    cycle_start_date = models.DateField(null=True, blank=True, help_text="Fecha de inicio del ciclo de facturación que cubre esta factura")
     amount_due = models.DecimalField(max_digits=10, decimal_places=2, help_text="Monto total a pagar")
     due_date = models.DateField(help_text="Fecha de vencimiento para el pago")
     paid_date = models.DateField(null=True, blank=True, help_text="Fecha en que se completó el pago (opcional)")
