@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ page_title|default:"Lista de Permisos de Acceso" }}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 900px; margin: auto; } /* Aumentado para más columnas */
+        .action-links { margin-bottom: 20px; }
+        .status-activo { color: green; }
+        .status-inactivo { color: red; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ page_title|default:"Lista de Permisos de Acceso" }}</h1>
+        <div class="action-links">
+            <a href="{% url 'log_viewer_app:permission_create' %}">Asignar Nuevo Permiso</a>
+            <br>
+            <a href="{% url 'log_viewer_app:person_list' %}">Ver Lista de Personas</a>
+            <br>
+            <a href="{% url 'log_viewer_app:access_log_list' %}">Ver Registros de Acceso</a>
+        </div>
+
+        {% if permissions %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Persona</th>
+                        <th>Punto de Acceso</th>
+                        <th>Estado</th>
+                        <th>Válido Desde</th>
+                        <th>Válido Hasta</th>
+                        <!--<th>Acciones</th>-->
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for perm in permissions %}
+                        <tr>
+                            <td>{{ perm.person.full_name }} ({{ perm.person.identifier }})</td>
+                            <td>{{ perm.access_point.name }}</td>
+                            <td class="{% if perm.is_active %}status-activo{% else %}status-inactivo{% endif %}">
+                                {% if perm.is_active %}Activo{% else %}Inactivo{% endif %}
+                            </td>
+                            <td>{{ perm.valid_from|date:"Y-m-d H:i"|default:"Siempre" }}</td>
+                            <td>{{ perm.valid_until|date:"Y-m-d H:i"|default:"Sin caducidad" }}</td>
+                            <!--<td><a href="#">Editar</a> | <a href="#">Eliminar</a></td>-->
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No hay permisos de acceso asignados todavía.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

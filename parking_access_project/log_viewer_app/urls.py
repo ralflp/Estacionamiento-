@@ -10,9 +10,11 @@ urlpatterns = [
     path('logs/', views.access_log_list_view, name='access_log_list'),
     path('persons/', views.person_list_view, name='person_list'),
     path('persons/add/', views.person_create_view, name='person_create'),
-
-    # Nuevas URLs para Vehículos
     path('vehicles/', views.vehicle_list_view, name='vehicle_list'),
     path('vehicles/add/', views.vehicle_create_view, name='vehicle_create'),
+
+    # Nuevas URLs para Permisos de Acceso
+    path('permissions/', views.permission_list_view, name='permission_list'),
+    path('permissions/assign/', views.permission_create_view, name='permission_create'),
     # Más adelante se podrían añadir URLs para editar, eliminar, etc.
 ]
