@@ -11,8 +11,9 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Group
 from django.contrib import messages
 import logging
-from django.db.models import Q
+from django.db.models import Q, Sum # Sum importado
 from django.utils import timezone
+from decimal import Decimal # Decimal importado
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,7 @@ def user_dashboard_view(request):
     user_vehicles = []
     user_subscriptions = []
     user_invoices = []
+    total_amount_due = Decimal('0.00') # Initialize here
 
     try:
         person_profile = Person.objects.get(user=user)
@@ -155,6 +157,14 @@ def user_dashboard_view(request):
                 person=person_profile
             ).select_related('user_subscription__service', 'person').order_by('-due_date', '-created_at')
 
+            # Calculate total amount due from pending/overdue invoices
+            due_invoices_aggregation = user_invoices.filter(
+                status__in=['pending', 'overdue']
+            ).aggregate(total_due=Sum('amount_due'))
+
+            if due_invoices_aggregation['total_due'] is not None:
+                total_amount_due = due_invoices_aggregation['total_due']
+
     except Person.DoesNotExist:
         pass
     except Exception as e:
@@ -166,8 +176,9 @@ def user_dashboard_view(request):
         'person_profile': person_profile,
         'user_permissions': user_permissions,
         'user_vehicles': user_vehicles,
-        'user_subscriptions': user_subscriptions, # Nuevo
-        'user_invoices': user_invoices,         # Nuevo
+        'user_subscriptions': user_subscriptions,
+        'user_invoices': user_invoices,
+        'total_amount_due': total_amount_due, # Added to context
         'page_title': 'Mi Portal de Usuario'
     }
     return render(request, 'log_viewer_app/user_dashboard.html', context)

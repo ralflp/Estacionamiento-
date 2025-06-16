@@ -14,11 +14,21 @@
         th { background-color: #007bff; color: white; }
         .empty-state { color: #777; font-style: italic; margin-top: 15px; }
         .welcome-message { margin-bottom: 20px; font-size: 1.1em; }
-        .status-activo { color: green; font-weight: bold; }
-        .status-inactivo { color: red; font-weight: bold; }
         nav { margin-bottom: 20px; text-align: center; }
         nav a { margin: 0 10px; color: #007bff; text-decoration: none; font-weight: bold; }
         nav a:hover { text-decoration: underline; }
+
+        /* Estilos para estados de suscripción */
+        .status-activo { color: green; font-weight: bold; }
+        .status-inactivo { color: red; font-weight: bold; }
+
+        /* Estilos para estados de factura */
+        .status-pending { color: orange; font-weight: bold; }
+        .status-paid { color: green; font-weight: bold; }
+        .status-overdue { color: red; font-weight: bold; }
+        .status-cancelled { color: grey; text-decoration: line-through; }
+        .status-draft { color: #555; font-style: italic; }
+        .status-partial { color: #007bff; font-weight: bold; } /* Para 'parcialmente pagada' */
     </style>
 </head>
 <body>
@@ -37,6 +47,9 @@
             </nav>
 
             {% if person_profile %}
+                <h2>Resumen de Cuenta</h2>
+                <p><strong>Saldo Pendiente Total: ${{ total_amount_due|floatformat:2 }}</strong></p>
+
                 <h2>Mis Permisos de Acceso Activos/Futuros</h2>
                 {% if user_permissions %}
                     <table>
@@ -138,7 +151,7 @@
                                     <td>{{ inv.created_at|date:"Y-m-d" }}</td>
                                     <td>{{ inv.due_date|date:"Y-m-d" }}</td>
                                     <td>${{ inv.amount_due|floatformat:2 }}</td>
-                                    <td>{{ inv.get_status_display }}</td>
+                                    <td class="status-{{ inv.status|lower }}">{{ inv.get_status_display }}</td>
                                     <td>{{ inv.paid_date|date:"Y-m-d"|default:"No pagada" }}</td>
                                     <td>
                                         {% if inv.user_subscription %}

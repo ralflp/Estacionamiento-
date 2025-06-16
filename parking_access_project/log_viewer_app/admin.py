@@ -182,5 +182,5 @@ class PaymentAdmin(admin.ModelAdmin):
             else: failed_count +=1
         if processed_count > 0: self.message_user(request, f"{processed_count} pago(s) procesado(s) exitosamente.", messages.SUCCESS)
         if already_processed_count > 0: self.message_user(request, f"{already_processed_count} pago(s) ya habían sido procesados.", messages.INFO)
-        if failed_count > 0: self.message_user(request, f"{failed_count} pago(s) no pudieron ser procesados.", messages.ERROR)
+        if failed_count > 0: self.message_user(request, f"{failed_count} pago(s) no pudieron ser procesados (p.ej., persona no asignada al pago, o error al intentar actualizar/crear permisos). Revise los logs para detalles.", messages.ERROR)
     process_selected_payments_action.short_description = "Procesar Pagos para Activar/Extender Acceso"

@@ -15,10 +15,13 @@ from datetime import timedelta, date as dt_date, datetime as dt_datetime, date
 from decimal import Decimal
 from unittest.mock import patch, MagicMock, call as mock_call
 from django.conf import settings
-from django.contrib import admin
+from django.contrib import admin, messages # Import messages
 from django.contrib.auth.models import User, Group
 from django.contrib.messages.storage.fallback import FallbackStorage
-from .admin import PaymentAdmin
+from .admin import PaymentAdmin, UserSubscriptionAdmin # Import UserSubscriptionAdmin
+from django.contrib.admin.sites import AdminSite # Import AdminSite
+from django.test.client import RequestFactory # Import RequestFactory
+
 
 # DRF Test specific imports
 from rest_framework.test import APIClient
@@ -566,7 +569,7 @@ class PaymentAdminActionTest(TestCase):
         self.assertEqual(mock_process_func.call_count, 2)
         mock_process_func.assert_any_call(self.payment1_new)
         mock_process_func.assert_any_call(self.payment3_new_fail)
-        admin_messages = [m.message for m in list(self.request._messages)]; self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages); self.assertIn("1 pago(s) ya habían sido procesados.", admin_messages); self.assertIn("1 pago(s) no pudieron ser procesados.", admin_messages)
+        admin_messages = [m.message for m in list(self.request._messages)]; self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages); self.assertIn("1 pago(s) ya habían sido procesados.", admin_messages); self.assertIn("1 pago(s) no pudieron ser procesados (p.ej., persona no asignada al pago, o error al intentar actualizar/crear permisos). Revise los logs para detalles.", admin_messages)
 
     @patch('log_viewer_app.admin.process_payment_for_access')
     def test_process_single_unprocessed_payment(self, mock_process_func):
@@ -1270,5 +1273,202 @@ class GeneratePeriodicInvoicesCommandTest(TestCase):
 # It should remain to test that lower-level function.
 # The prompt asks to "Update Pruebas Unitarias", implying modifying existing ones and adding new ones.
 # BillingUtilsTest (for generate_invoice_for_subscription) remains valid for the lower-level function.
+
+# The OldGeneratePeriodicInvoicesCommandTest class is now removed.
+
+
+class UserSubscriptionAdminActionTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.person1 = Person.objects.create(full_name="AdminAction Person 1", identifier="AAP1")
+        cls.person2 = Person.objects.create(full_name="AdminAction Person 2", identifier="AAP2")
+        cls.service_monthly = Service.objects.create(name="AdminAction Monthly", price=Decimal("70.00"))
+
+        cls.sub_due_new_invoice = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_monthly, start_date=date(2023, 1, 1),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True
+        )
+        cls.sub_due_existing_invoice = UserSubscription.objects.create(
+            person=cls.person2, service=cls.service_monthly, start_date=date(2023, 1, 1),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True
+        )
+        # Assuming today is Feb 15 for the test, this invoice is for the current due cycle
+        Invoice.objects.create(
+            person=cls.person2, user_subscription=cls.sub_due_existing_invoice,
+            cycle_start_date=date(2023, 2, 15),
+            invoice_number="EXISTING001", amount_due=Decimal("70.00"), due_date=date(2023, 3, 2)
+        )
+
+        cls.sub_not_due_future_cycle = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_monthly, start_date=date(2023, 2, 1),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=True
+        )
+        # Last invoice for sub_not_due_future_cycle was Feb 15, so next is Mar 15.
+        Invoice.objects.create(
+            person=cls.person1, user_subscription=cls.sub_not_due_future_cycle, cycle_start_date=date(2023, 2, 15),
+            invoice_number="EXISTING002", amount_due=Decimal("70.00"), due_date=date(2023, 3, 2)
+        )
+
+        cls.sub_inactive = UserSubscription.objects.create(
+            person=cls.person2, service=cls.service_monthly, start_date=date(2023, 1, 1),
+            billing_cycle='monthly', billing_cycle_anchor_day=15, is_active=False
+        )
+
+        # This subscription's anchor day won't match the mocked 'today' in some tests
+        cls.sub_not_due_anchor_day = UserSubscription.objects.create(
+            person=cls.person1, service=cls.service_monthly, start_date=date(2023,1,1),
+            billing_cycle='monthly', billing_cycle_anchor_day=16, is_active=True
+        )
+
+
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser('admin_test_user', 'admintest@example.com', 'password')
+        self.request_factory = RequestFactory()
+        self.request = self.request_factory.get('/') # Basic request
+        self.request.user = self.admin_user
+        self.request.session = MagicMock() # Mock the session object
+
+        # Mock messages framework
+        storage = FallbackStorage(self.request)
+        setattr(self.request, '_messages', storage)
+
+        self.model_admin = UserSubscriptionAdmin(model=UserSubscription, admin_site=AdminSite())
+
+    @patch('log_viewer_app.admin.generate_invoice_for_subscription')
+    @patch('log_viewer_app.admin.get_due_cycle_start_date_for_subscription')
+    @patch('log_viewer_app.admin.timezone')
+    def test_action_generates_new_invoice_successfully(self, mock_timezone, mock_get_due_date, mock_gen_invoice):
+        mock_today = date(2023, 2, 15)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+
+        # For sub_due_new_invoice, assume its last invoice was Jan 15, so Feb 15 is due.
+        mock_get_due_date.return_value = date(2023, 2, 15)
+        mock_invoice_instance = MagicMock(spec=Invoice); mock_invoice_instance.invoice_number = "NEW001"
+        mock_gen_invoice.return_value = (mock_invoice_instance, True) # New invoice created
+
+        queryset = UserSubscription.objects.filter(pk=self.sub_due_new_invoice.pk)
+        self.model_admin.generate_invoices_for_selected_action(self.request, queryset)
+
+        mock_get_due_date.assert_called_once_with(self.sub_due_new_invoice, mock_today)
+        mock_gen_invoice.assert_called_once_with(self.sub_due_new_invoice, date(2023, 2, 15))
+
+        messages_sent = [m.message for m in self.request._messages]
+        self.assertIn("1 nueva(s) factura(s) generada(s) exitosamente.", messages_sent)
+
+    @patch('log_viewer_app.admin.generate_invoice_for_subscription')
+    @patch('log_viewer_app.admin.get_due_cycle_start_date_for_subscription')
+    @patch('log_viewer_app.admin.timezone')
+    def test_action_finds_existing_invoice(self, mock_timezone, mock_get_due_date, mock_gen_invoice):
+        mock_today = date(2023, 2, 15)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+
+        mock_get_due_date.return_value = date(2023, 2, 15)
+        existing_invoice = Invoice.objects.get(user_subscription=self.sub_due_existing_invoice, cycle_start_date=mock_today)
+        mock_gen_invoice.return_value = (existing_invoice, False) # Invoice already existed
+
+        queryset = UserSubscription.objects.filter(pk=self.sub_due_existing_invoice.pk)
+        self.model_admin.generate_invoices_for_selected_action(self.request, queryset)
+
+        mock_get_due_date.assert_called_once_with(self.sub_due_existing_invoice, mock_today)
+        mock_gen_invoice.assert_called_once_with(self.sub_due_existing_invoice, mock_today)
+        messages_sent = [m.message for m in self.request._messages]
+        self.assertIn("1 factura(s) ya existían para el ciclo actual y fueron omitidas por la generación.", messages_sent)
+
+    @patch('log_viewer_app.admin.generate_invoice_for_subscription')
+    @patch('log_viewer_app.admin.get_due_cycle_start_date_for_subscription')
+    @patch('log_viewer_app.admin.timezone')
+    def test_action_skips_not_due(self, mock_timezone, mock_get_due_date, mock_gen_invoice): # Covers future cycle and wrong anchor day via get_due_cycle returning None
+        mock_today = date(2023, 2, 15)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+
+        # For sub_not_due_future_cycle, next cycle is Mar 15.
+        # For sub_not_due_anchor_day, admin action calls helper, helper returns date, but admin action does not have anchor day check.
+        # The prompt's admin action code calls get_due_cycle_start_date_for_subscription, which does NOT check anchor day.
+        # So, for sub_not_due_anchor_day, get_due_cycle_start_date_for_subscription might return a date if a cycle is otherwise due.
+        # The admin action as per prompt *would* try to bill it if get_due_cycle_start_date_for_subscription returns a date.
+        # Let's test sub_not_due_future_cycle where get_due_cycle_start_date_for_subscription returns None.
+        mock_get_due_date.return_value = None
+
+        queryset = UserSubscription.objects.filter(pk=self.sub_not_due_future_cycle.pk)
+        self.model_admin.generate_invoices_for_selected_action(self.request, queryset)
+
+        mock_get_due_date.assert_called_once_with(self.sub_not_due_future_cycle, mock_today)
+        mock_gen_invoice.assert_not_called()
+        messages_sent = [m.message for m in self.request._messages]
+        self.assertIn("1 suscripciones fueron omitidas (no se cumplían criterios de facturación como ciclo/fechas o fallaron). Revise los logs para más detalles en caso de fallos.", messages_sent)
+
+
+    @patch('log_viewer_app.admin.get_due_cycle_start_date_for_subscription') # Mock get_due_date
+    @patch('log_viewer_app.admin.generate_invoice_for_subscription') # Mock gen_invoice
+    @patch('log_viewer_app.admin.timezone')
+    def test_action_skips_inactive_subscription(self, mock_timezone, mock_gen_invoice, mock_get_due_date): # Corrected order of mocks
+        mock_today = date(2023, 2, 15)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+
+        queryset = UserSubscription.objects.filter(pk=self.sub_inactive.pk)
+        self.model_admin.generate_invoices_for_selected_action(self.request, queryset)
+
+        # get_due_cycle_start_date_for_subscription should not be called because of the is_active check in the action
+        mock_get_due_date.assert_not_called()
+        mock_gen_invoice.assert_not_called()
+        messages_sent = [m.message for m in self.request._messages]
+        self.assertIn("1 suscripciones fueron omitidas (no se cumplían criterios de facturación como ciclo/fechas o fallaron). Revise los logs para más detalles en caso de fallos.", messages_sent)
+
+    @patch('log_viewer_app.admin.generate_invoice_for_subscription')
+    @patch('log_viewer_app.admin.get_due_cycle_start_date_for_subscription')
+    @patch('log_viewer_app.admin.timezone')
+    def test_action_handles_internal_failure_in_generation(self, mock_timezone, mock_get_due_date, mock_gen_invoice):
+        mock_today = date(2023, 2, 15)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+
+        mock_get_due_date.return_value = mock_today # This sub is due
+        mock_gen_invoice.return_value = (None, False) # Simulate failure in generate_invoice_for_subscription
+
+        queryset = UserSubscription.objects.filter(pk=self.sub_due_new_invoice.pk)
+        self.model_admin.generate_invoices_for_selected_action(self.request, queryset)
+
+        messages_sent = [m.message for m in self.request._messages]
+        self.assertIn("1 suscripciones fueron omitidas (no se cumplían criterios de facturación como ciclo/fechas o fallaron). Revise los logs para más detalles en caso de fallos.", messages_sent)
+
+    @patch('log_viewer_app.admin.generate_invoice_for_subscription')
+    @patch('log_viewer_app.admin.get_due_cycle_start_date_for_subscription')
+    @patch('log_viewer_app.admin.timezone')
+    def test_action_handles_mixed_outcomes(self, mock_timezone, mock_get_due_date, mock_gen_invoice):
+        mock_today = date(2023, 2, 15)
+        mock_timezone.now.return_value = dt_datetime(mock_today.year, mock_today.month, mock_today.day)
+
+        mock_new_invoice = MagicMock(spec=Invoice); mock_new_invoice.invoice_number = "MIXED_NEW"
+        existing_invoice = Invoice.objects.get(user_subscription=self.sub_due_existing_invoice, cycle_start_date=mock_today)
+
+        def get_due_date_side_effect(subscription, as_of_date_arg):
+            if subscription == self.sub_due_new_invoice: return mock_today
+            if subscription == self.sub_due_existing_invoice: return mock_today
+            if subscription == self.sub_not_due_future_cycle: return None # Not due
+            if subscription == self.sub_inactive: return None # is_active check in action should catch this first
+            return None
+        mock_get_due_date.side_effect = get_due_date_side_effect
+
+        def gen_invoice_side_effect(subscription, cycle_start_date):
+            if subscription == self.sub_due_new_invoice: return (mock_new_invoice, True)
+            if subscription == self.sub_due_existing_invoice: return (existing_invoice, False)
+            return (None, False)
+        mock_gen_invoice.side_effect = gen_invoice_side_effect
+
+        queryset = UserSubscription.objects.filter(
+            pk__in=[
+                self.sub_due_new_invoice.pk,
+                self.sub_due_existing_invoice.pk,
+                self.sub_not_due_future_cycle.pk,
+                self.sub_inactive.pk
+            ]
+        ).order_by('pk')
+
+        self.model_admin.generate_invoices_for_selected_action(self.request, queryset)
+
+        messages_sent = [m.message for m in self.request._messages]
+        self.assertTrue(any("1 nueva(s) factura(s) generada(s) exitosamente." in m for m in messages_sent))
+        self.assertTrue(any("1 factura(s) ya existían para el ciclo actual y fueron omitidas por la generación." in m for m in messages_sent))
+        # sub_not_due_future_cycle (get_due_cycle returns None) + sub_inactive (skipped by action's initial check) = 2 skips
+        self.assertTrue(any("2 suscripciones fueron omitidas" in m for m in messages_sent))
 
 # The OldGeneratePeriodicInvoicesCommandTest class is now removed.
