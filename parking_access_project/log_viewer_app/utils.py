@@ -1,5 +1,10 @@
-from .models import AccessLog, Person, AccessPoint, AccessPermission
+from .models import AccessLog, Person, AccessPoint, AccessPermission, ControlDevice # ControlDevice añadido
 from django.utils import timezone
+import paho.mqtt.publish as publish
+from django.conf import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 def record_access_attempt(qr_data_received, access_was_granted, event_type_observed="acceso_general", user_id_info=None):
     """
@@ -12,42 +17,36 @@ def record_access_attempt(qr_data_received, access_was_granted, event_type_obser
             event_type=event_type_observed,
             user_id=user_id_info
         )
-        # print(f"Log entry created: {log_entry}") # Opcional, para depuración
         return log_entry
     except Exception as e:
-        # print(f"Error creating log entry: {e}") # Opcional, para depuración
+        logger.error(f"Error al crear la entrada de log en BD para QR '{qr_data_received}': {e}")
         return None
 
 def verify_access_with_models(qr_identifier, access_point_name):
     """
     Verifica el acceso basado en el identificador QR y el nombre del punto de acceso,
     utilizando los modelos Person, AccessPoint y AccessPermission.
+    Publica un mensaje MQTT si el acceso es concedido y hay dispositivos de control.
     También registra el intento de acceso.
     """
     person = None
-    access_point = None
+    access_point_obj = None # Renombrado para claridad
     access_granted = False
-    user_id_for_log = None # Puede ser el person.identifier o el qr_identifier
+    user_id_for_log = None
 
     try:
-        # Intenta encontrar a la persona por su identificador (que se asume es el contenido del QR)
         person = Person.objects.get(identifier=qr_identifier)
-        user_id_for_log = person.identifier # Usar el identificador de persona para el log
+        user_id_for_log = person.identifier
 
         try:
-            access_point = AccessPoint.objects.get(name=access_point_name)
-
-            # Buscar un permiso específico para esta persona y punto de acceso
+            access_point_obj = AccessPoint.objects.get(name=access_point_name)
             permission = AccessPermission.objects.get(
                 person=person,
-                access_point=access_point
+                access_point=access_point_obj
             )
 
-            # Verificar si el permiso está activo y dentro del rango de validez temporal
             now = timezone.now()
-            is_valid_time = True # Asumir válido a menos que se demuestre lo contrario
-
-            # Chequear validez temporal si las fechas están establecidas
+            is_valid_time = True
             if permission.valid_from and permission.valid_from > now:
                 is_valid_time = False
             if permission.valid_until and permission.valid_until < now:
@@ -57,94 +56,73 @@ def verify_access_with_models(qr_identifier, access_point_name):
                 access_granted = True
 
         except AccessPoint.DoesNotExist:
-            # Punto de acceso no encontrado. Acceso denegado.
-            # El log se registrará con access_granted = False (ya es su valor por defecto)
-            pass
+            logger.warning(f"Punto de acceso '{access_point_name}' no encontrado al verificar acceso para QR '{qr_identifier}'.")
         except AccessPermission.DoesNotExist:
-            # Permiso no encontrado para esta persona y punto de acceso. Acceso denegado.
-            pass
+            logger.info(f"Permiso no encontrado para QR '{qr_identifier}' en AP '{access_point_name}'.")
 
     except Person.DoesNotExist:
-        # Persona no encontrada con ese qr_identifier. Acceso denegado.
-        user_id_for_log = qr_identifier # Usar el qr_identifier original si la persona no se encontró
-        pass
+        logger.info(f"Persona con identificador QR '{qr_identifier}' no encontrada.")
+        user_id_for_log = qr_identifier
     except Exception as e:
-        # Cualquier otra excepción inesperada, registrar y denegar acceso por seguridad.
-        # Considerar loguear este error 'e' a un sistema de monitoreo en producción.
-        # print(f"Error inesperado en verify_access_with_models: {e}") # Para depuración
-        user_id_for_log = qr_identifier # Usar el qr_identifier original
-        access_granted = False # Asegurar que el acceso sea denegado
+        logger.error(f"Error inesperado en verify_access_with_models para QR '{qr_identifier}': {e}")
+        user_id_for_log = qr_identifier
+        access_granted = False # Asegurar denegación en caso de error inesperado
 
+    # Lógica de publicación MQTT si el acceso es concedido
+    if access_granted and access_point_obj: # access_point_obj debe existir si se concedió acceso basado en permiso
+        active_control_devices = ControlDevice.objects.filter(access_point=access_point_obj, is_active=True)
+        if not active_control_devices.exists():
+            logger.warning(f"Acceso concedido en {access_point_obj.name}, pero no hay ControlDevices activos configurados para este punto de acceso.")
+        else:
+            for device in active_control_devices:
+                logger.info(f"Intentando abrir {access_point_obj.name} via dispositivo {device.name} en tópico {device.mqtt_topic}")
+                open_payload = "OPEN" # Payload podría ser configurable por dispositivo en el futuro
+                success = publish_mqtt_message(topic=device.mqtt_topic, payload=open_payload)
+                if success:
+                    logger.info(f"MQTT: Mensaje '{open_payload}' publicado exitosamente a {device.mqtt_topic} para {device.name}.")
+                else:
+                    # El error ya se loguea dentro de publish_mqtt_message
+                    logger.error(f"MQTT: Fallo al publicar mensaje '{open_payload}' a {device.mqtt_topic} para {device.name} (revisar logs anteriores para detalles).")
 
-    # Registrar el intento de acceso usando la función existente
+    # Registrar el intento de acceso (siempre se hace)
     record_access_attempt(
         qr_data_received=qr_identifier,
         access_was_granted=access_granted,
-        event_type_observed="verificacion_modelo_django", # Tipo de evento más específico
+        event_type_observed="verificacion_modelo_django",
         user_id_info=user_id_for_log
     )
 
     return access_granted
 
-# Ejemplo de cómo se podría probar manualmente (no se ejecutará automáticamente por el subtask):
-# if __name__ == '__main__':
-#     # Configurar entorno Django para ejecución standalone
-#     import os
-#     import django
-#     # Asegúrate de que DJANGO_SETTINGS_MODULE apunte al settings.py de tu proyecto Django
-#     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'parking_access_project.settings')
-#     django.setup()
+def publish_mqtt_message(topic, payload, retain=False):
+    """
+    Publica un mensaje a un tópico MQTT especificado.
+    """
+    try:
+        auth_dict = None
+        mqtt_user = getattr(settings, 'MQTT_USERNAME', None)
+        mqtt_pass = getattr(settings, 'MQTT_PASSWORD', None)
 
-#     # --- Crear datos de prueba ---
-#     # (Esto es solo un ejemplo. En un caso real, estos datos se gestionarían
-#     # a través del panel de administración de Django, fixtures, o scripts de populación.)
+        if mqtt_user and mqtt_pass:
+            auth_dict = {'username': mqtt_user, 'password': mqtt_pass}
 
-#     # Crear una Persona
-#     persona_test, created_p = Person.objects.get_or_create(
-#         full_name="Ana Torres",
-#         identifier="QR_ANA_001"
-#     )
-#     if created_p: print(f"Persona creada: {persona_test}")
+        publish.single(
+            topic,
+            payload=payload,
+            qos=1,
+            retain=retain,
+            hostname=settings.MQTT_BROKER_HOST,
+            port=settings.MQTT_BROKER_PORT,
+            client_id=settings.MQTT_CLIENT_ID,
+            auth=auth_dict
+        )
+        logger.info(f"MQTT: Publicado en tópico '{topic}': {payload}")
+        return True
+    except ConnectionRefusedError:
+        logger.error(f"MQTT Error: Conexión rechazada al broker {settings.MQTT_BROKER_HOST}:{settings.MQTT_BROKER_PORT}. Verifica que el broker esté activo y accesible.")
+        return False
+    except Exception as e:
+        logger.error(f"MQTT Error: No se pudo publicar en tópico '{topic}'. Error: {e}")
+        return False
 
-#     # Crear un Punto de Acceso
-#     punto_acceso_test, created_ap = AccessPoint.objects.get_or_create(
-#         name="Entrada Principal Edificio A"
-#     )
-#     if created_ap: print(f"Punto de acceso creado: {punto_acceso_test}")
-
-#     # Conceder Permiso a Ana para la Entrada Principal
-#     permiso_test, created_perm = AccessPermission.objects.get_or_create(
-#         person=persona_test,
-#         access_point=punto_acceso_test,
-#         defaults={
-#             'is_active': True,
-#             # 'valid_from' usará timezone.now por defecto si no se especifica
-#             # 'valid_until': None (sin caducidad)
-#         }
-#     )
-#     if created_perm: print(f"Permiso creado: {permiso_test}")
-
-
-#     # --- Probar la función verify_access_with_models ---
-#     print("\nIntentando verificar acceso para QR_ANA_001 en 'Entrada Principal Edificio A':")
-#     if verify_access_with_models("QR_ANA_001", "Entrada Principal Edificio A"):
-#         print("Resultado: Acceso Permitido")
-#     else:
-#         print("Resultado: Acceso Denegado")
-
-#     print("\nIntentando verificar acceso para QR_DESCONOCIDO en 'Entrada Principal Edificio A':")
-#     if verify_access_with_models("QR_DESCONOCIDO_999", "Entrada Principal Edificio A"):
-#         print("Resultado: Acceso Permitido")
-#     else:
-#         print("Resultado: Acceso Denegado")
-
-#     print("\nIntentando verificar acceso para QR_ANA_001 en 'Puerta Trasera' (Punto de acceso no existente o sin permiso):")
-#     if verify_access_with_models("QR_ANA_001", "Puerta Trasera"):
-#         print("Resultado: Acceso Permitido")
-#     else:
-#         print("Resultado: Acceso Denegado")
-
-#     # Mostrar todos los logs creados durante esta prueba (opcional)
-#     # print("\nRegistros de acceso creados durante la prueba:")
-#     # for log_item in AccessLog.objects.filter(event_type_observed="verificacion_modelo_django"):
-#     # print(log_item)
+# ... (Bloque if __name__ == '__main__' comentado) ...

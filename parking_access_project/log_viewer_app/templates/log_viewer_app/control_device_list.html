@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ page_title|default:"Lista de Dispositivos de Control" }}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 1000px; margin: auto; } /* Ancho aumentado */
+        .action-links { margin-bottom: 20px; }
+        .status-activo { color: green; }
+        .status-inactivo { color: red; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ page_title|default:"Lista de Dispositivos de Control" }}</h1>
+        <div class="action-links">
+            <a href="{% url 'log_viewer_app:control_device_create' %}">Añadir Nuevo Dispositivo</a>
+            <br>
+            <a href="{% url 'log_viewer_app:access_log_list' %}">Ver Registros de Acceso</a>
+            <!-- Podrías añadir más enlaces a otras listas (personas, vehículos, permisos) si es útil -->
+        </div>
+
+        {% if devices %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Nombre</th>
+                        <th>Device ID</th>
+                        <th>Punto de Acceso</th>
+                        <th>Tópico MQTT</th>
+                        <th>IP Address</th>
+                        <th>Estado</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for device in devices %}
+                        <tr>
+                            <td>{{ device.name }}</td>
+                            <td>{{ device.device_id }}</td>
+                            <td>{{ device.access_point.name|default:"No asignado" }}</td>
+                            <td>{{ device.mqtt_topic }}</td>
+                            <td>{{ device.ip_address|default:"N/A" }}</td>
+                            <td class="{% if device.is_active %}status-activo{% else %}status-inactivo{% endif %}">
+                                {% if device.is_active %}Activo{% else %}Inactivo{% endif %}
+                            </td>
+                            <td><a href="{% url 'log_viewer_app:control_device_update' device.pk %}">Editar</a></td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No hay dispositivos de control registrados todavía.</p>
+        {% endif %}
+    </div>
+</body>
+</html>

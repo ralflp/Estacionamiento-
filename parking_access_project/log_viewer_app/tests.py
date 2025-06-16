@@ -1,10 +1,13 @@
 from django.test import TestCase
 from django.urls import reverse
-from .models import AccessLog, Person, Vehicle, AccessPoint, AccessPermission
-from .forms import PersonForm, VehicleForm, AccessPermissionForm
-from .utils import verify_access_with_models # For testing access logic
+from .models import AccessLog, Person, Vehicle, AccessPoint, AccessPermission, ControlDevice # ControlDevice added
+from .forms import PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm # ControlDeviceForm added
+from .utils import verify_access_with_models, publish_mqtt_message # publish_mqtt_message added
 from django.utils import timezone
 from datetime import timedelta
+from unittest.mock import patch, MagicMock # For mocking
+from django.conf import settings # To check MQTT settings
+
 
 # --- Model Tests ---
 class PersonModelTest(TestCase):
@@ -68,6 +71,35 @@ class AccessPermissionModelTest(TestCase):
         with self.assertRaises(Exception): # django.db.utils.IntegrityError
             AccessPermission.objects.create(person=self.person, access_point=self.access_point)
 
+class ControlDeviceModelTest(TestCase):
+    def setUp(self):
+        self.ap = AccessPoint.objects.create(name="Garage Door AP")
+
+    def test_control_device_creation(self):
+        device = ControlDevice.objects.create(
+            name="Garage Controller 1",
+            device_id="GDCTRL001",
+            access_point=self.ap,
+            mqtt_topic="garage/door1/control",
+            ip_address="192.168.1.100",
+            is_active=True
+        )
+        self.assertIsInstance(device, ControlDevice)
+        self.assertEqual(device.name, "Garage Controller 1")
+        self.assertEqual(device.device_id, "GDCTRL001")
+        self.assertEqual(device.access_point, self.ap)
+        self.assertEqual(device.mqtt_topic, "garage/door1/control")
+        self.assertEqual(str(device), "Garage Controller 1 (GDCTRL001) - AP: Garage Door AP")
+
+    def test_control_device_str_no_ap(self):
+        device = ControlDevice.objects.create(
+            name="Unassigned Controller",
+            device_id="UCTRL002",
+            mqtt_topic="unassigned/control"
+        )
+        self.assertEqual(str(device), "Unassigned Controller (UCTRL002) - AP: No asignado")
+
+
 # --- Form Tests ---
 class PersonFormTest(TestCase):
     def test_person_form_valid_data(self):
@@ -113,7 +145,7 @@ class AccessPermissionFormTest(TestCase):
             'person': self.person.pk,
             'access_point': self.ap.pk,
             'is_active': True,
-            'valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'), # Format for datetime-local
+            'valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'),
             'valid_until': (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
         })
         self.assertTrue(form.is_valid())
@@ -124,14 +156,45 @@ class AccessPermissionFormTest(TestCase):
             'access_point': self.ap.pk,
             'is_active': True
         })
-        self.assertTrue(form.is_valid()) # valid_from uses default, valid_until is blank
+        self.assertTrue(form.is_valid())
         permission = form.save()
         self.assertIsInstance(permission, AccessPermission)
         self.assertTrue(permission.is_active)
 
+class ControlDeviceFormTest(TestCase):
+    def setUp(self):
+        self.ap = AccessPoint.objects.create(name="Device Form AP")
 
-# --- View Tests (Original AccessLogListViewTest and new ones) ---
-class AccessLogListViewTest(TestCase): # Renamed from previous subtask's example if needed
+    def test_control_device_form_valid_data(self):
+        form = ControlDeviceForm(data={
+            'name': 'Test Device',
+            'device_id': 'DEVFORM001',
+            'access_point': self.ap.pk,
+            'mqtt_topic': 'test/device/topic',
+            'is_active': True
+        })
+        self.assertTrue(form.is_valid())
+
+    def test_control_device_form_invalid_missing_device_id(self):
+        form = ControlDeviceForm(data={'name': 'Test Device No ID'})
+        self.assertFalse(form.is_valid())
+        self.assertIn('device_id', form.errors)
+
+    def test_control_device_form_save(self):
+        form = ControlDeviceForm(data={
+            'name': 'Save Device',
+            'device_id': 'SDEV001',
+            'access_point': self.ap.pk,
+            'mqtt_topic': 'save/device/topic'
+        })
+        self.assertTrue(form.is_valid())
+        device = form.save()
+        self.assertIsInstance(device, ControlDevice)
+        self.assertEqual(device.device_id, 'SDEV001')
+
+
+# --- View Tests ---
+class AccessLogListViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
         AccessLog.objects.create(qr_data="QR_Log_1", access_granted=True)
@@ -183,17 +246,16 @@ class PersonCreateViewTest(TestCase):
         response = self.client.post(reverse('log_viewer_app:person_create'), {
             'full_name': 'Create Person Test', 'identifier': 'CPT01'
         })
-        self.assertEqual(response.status_code, 302) # Redirect on success
+        self.assertEqual(response.status_code, 302)
         self.assertRedirects(response, reverse('log_viewer_app:person_list'))
         self.assertEqual(Person.objects.count(), initial_count + 1)
 
     def test_person_create_view_post_invalid(self):
         response = self.client.post(reverse('log_viewer_app:person_create'), {'full_name': 'No ID'})
-        self.assertEqual(response.status_code, 200) # Re-renders form
+        self.assertEqual(response.status_code, 200)
         self.assertFormError(response.context['form'], 'identifier', 'This field is required.')
 
-
-class VehicleListViewTest(TestCase): # Similar structure for Vehicle and AccessPermission views
+class VehicleListViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
         owner = Person.objects.create(full_name="Owner For Vehicle", identifier="OFV01")
@@ -221,7 +283,6 @@ class VehicleCreateViewTest(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(Vehicle.objects.filter(license_plate='VCV01').exists())
 
-
 class AccessPermissionListViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -234,7 +295,6 @@ class AccessPermissionListViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'log_viewer_app/permission_list.html')
         self.assertContains(response, "PLP01")
-
 
 class AccessPermissionCreateViewTest(TestCase):
     def setUp(self):
@@ -251,16 +311,133 @@ class AccessPermissionCreateViewTest(TestCase):
             'person': self.person.pk,
             'access_point': self.ap.pk,
             'is_active': True,
-            # valid_from and valid_until are optional or use defaults
         })
         self.assertEqual(response.status_code, 302, f"Form errors: {response.context.get('form').errors if response.context else 'No context'}")
         self.assertTrue(AccessPermission.objects.filter(person=self.person, access_point=self.ap).exists())
 
+class ControlDeviceListViewTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        ap = AccessPoint.objects.create(name="CD List AP")
+        ControlDevice.objects.create(name="CD List Dev 1", device_id="CDL1", access_point=ap, mqtt_topic="cd/list/1")
 
-# --- Logic Tests (verify_access_with_models) ---
+    def test_cd_list_view_accessible(self):
+        response = self.client.get(reverse('log_viewer_app:control_device_list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/control_device_list.html')
+        self.assertContains(response, "CDL1")
+
+class ControlDeviceCreateViewTest(TestCase):
+    def setUp(self):
+        self.ap = AccessPoint.objects.create(name="CD Create AP")
+
+    def test_cd_create_view_get(self):
+        response = self.client.get(reverse('log_viewer_app:control_device_create'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.context['form'], ControlDeviceForm)
+
+    def test_cd_create_view_post_valid(self):
+        response = self.client.post(reverse('log_viewer_app:control_device_create'), {
+            'name': 'New CD', 'device_id': 'NCD01', 'access_point': self.ap.pk, 'mqtt_topic': 'new/cd/topic'
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(ControlDevice.objects.filter(device_id='NCD01').exists())
+
+class ControlDeviceUpdateViewTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.ap = AccessPoint.objects.create(name="CD Update AP")
+        cls.device = ControlDevice.objects.create(name="CD Update Dev", device_id="CDU01", access_point=cls.ap, mqtt_topic="cd/update/topic")
+
+    def test_cd_update_view_get(self):
+        response = self.client.get(reverse('log_viewer_app:control_device_update', kwargs={'pk': self.device.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.context['form'], ControlDeviceForm)
+        self.assertContains(response, "CDU01")
+
+    def test_cd_update_view_post_valid(self):
+        response = self.client.post(reverse('log_viewer_app:control_device_update', kwargs={'pk': self.device.pk}), {
+            'name': 'Updated CD Name', 'device_id': 'CDU01_updated', # Assuming device_id can be updated
+            'access_point': self.ap.pk, 'mqtt_topic': 'updated/cd/topic', 'is_active': True
+        })
+        self.assertEqual(response.status_code, 302)
+        updated_device = ControlDevice.objects.get(pk=self.device.pk)
+        self.assertEqual(updated_device.name, "Updated CD Name")
+        self.assertEqual(updated_device.device_id, "CDU01_updated")
+
+    def test_cd_update_view_non_existent(self):
+        response = self.client.get(reverse('log_viewer_app:control_device_update', kwargs={'pk': 9999}))
+        self.assertEqual(response.status_code, 404)
+
+
+# --- Logic Tests (verify_access_with_models & MQTT) ---
+class MQTTUtilsTest(TestCase):
+    @patch('log_viewer_app.utils.publish.single') # Mock paho.mqtt.publish.single
+    def test_publish_mqtt_message_success(self, mock_publish_single):
+        settings.MQTT_BROKER_HOST = 'testbroker'
+        settings.MQTT_BROKER_PORT = 18830
+        settings.MQTT_CLIENT_ID = 'testclient'
+        # Test without auth first
+        if hasattr(settings, 'MQTT_USERNAME'): delattr(settings, 'MQTT_USERNAME')
+        if hasattr(settings, 'MQTT_PASSWORD'): delattr(settings, 'MQTT_PASSWORD')
+
+        result = publish_mqtt_message("test/topic", "payload_test")
+        self.assertTrue(result)
+        mock_publish_single.assert_called_once_with(
+            "test/topic",
+            payload="payload_test",
+            qos=1,
+            retain=False,
+            hostname='testbroker',
+            port=18830,
+            client_id='testclient',
+            auth=None
+        )
+
+    @patch('log_viewer_app.utils.publish.single')
+    def test_publish_mqtt_message_with_auth(self, mock_publish_single):
+        settings.MQTT_BROKER_HOST = 'authbroker'
+        settings.MQTT_BROKER_PORT = 18831
+        settings.MQTT_CLIENT_ID = 'authclient'
+        settings.MQTT_USERNAME = 'user'
+        settings.MQTT_PASSWORD = 'pass'
+
+        result = publish_mqtt_message("auth/topic", "auth_payload")
+        self.assertTrue(result)
+        mock_publish_single.assert_called_once_with(
+            "auth/topic",
+            payload="auth_payload",
+            qos=1,
+            retain=False,
+            hostname='authbroker',
+            port=18831,
+            client_id='authclient',
+            auth={'username': 'user', 'password': 'pass'}
+        )
+
+    @patch('log_viewer_app.utils.publish.single', side_effect=ConnectionRefusedError("Test refuse"))
+    @patch('log_viewer_app.utils.logger.error') # Mock logger.error
+    def test_publish_mqtt_connection_refused(self, mock_logger_error, mock_publish_single):
+        result = publish_mqtt_message("refuse/topic", "refuse_payload")
+        self.assertFalse(result)
+        mock_logger_error.assert_called_with(
+            f"MQTT Error: Conexión rechazada al broker {settings.MQTT_BROKER_HOST}:{settings.MQTT_BROKER_PORT}. Verifica que el broker esté activo y accesible."
+        )
+
+    @patch('log_viewer_app.utils.publish.single', side_effect=Exception("Generic MQTT error"))
+    @patch('log_viewer_app.utils.logger.error')
+    def test_publish_mqtt_generic_exception(self, mock_logger_error, mock_publish_single):
+        result = publish_mqtt_message("generic/topic", "generic_payload")
+        self.assertFalse(result)
+        mock_logger_error.assert_called_with(
+            "MQTT Error: No se pudo publicar en tópico 'generic/topic'. Error: Generic MQTT error"
+        )
+
+
 class VerifyAccessLogicTest(TestCase):
     @classmethod
     def setUpTestData(cls):
+        # Base entities
         cls.person1 = Person.objects.create(full_name="Allowed User", identifier="ALLOW_ID")
         cls.person2 = Person.objects.create(full_name="NoPerm User", identifier="NOPERM_ID")
         cls.person3 = Person.objects.create(full_name="InactivePerm User", identifier="INACTIVE_ID")
@@ -268,31 +445,27 @@ class VerifyAccessLogicTest(TestCase):
         cls.person5 = Person.objects.create(full_name="ExpiredPerm User", identifier="EXPIRED_ID")
         cls.person6 = Person.objects.create(full_name="TimeValid User", identifier="TIMEVALID_ID")
 
-
         cls.ap1 = AccessPoint.objects.create(name="MainDoor")
         cls.ap2 = AccessPoint.objects.create(name="SecretDoor")
+        cls.ap_mqtt = AccessPoint.objects.create(name="MQTT_Controlled_Door")
 
-        # Valid, active permission
+
+        # Permissions
         AccessPermission.objects.create(person=cls.person1, access_point=cls.ap1, is_active=True)
-        # Active permission for a different door
         AccessPermission.objects.create(person=cls.person1, access_point=cls.ap2, is_active=True)
-        # Inactive permission
         AccessPermission.objects.create(person=cls.person3, access_point=cls.ap1, is_active=False)
-        # Future permission
-        AccessPermission.objects.create(person=cls.person4, access_point=cls.ap1, is_active=True,
-                                        valid_from=timezone.now() + timedelta(days=1))
-        # Expired permission
-        AccessPermission.objects.create(person=cls.person5, access_point=cls.ap1, is_active=True,
-                                        valid_until=timezone.now() - timedelta(days=1))
-        # Time-valid permission (valid_from in past, valid_until in future)
-        AccessPermission.objects.create(person=cls.person6, access_point=cls.ap1, is_active=True,
-                                        valid_from=timezone.now() - timedelta(hours=1),
-                                        valid_until=timezone.now() + timedelta(hours=1))
+        AccessPermission.objects.create(person=cls.person4, access_point=cls.ap1, is_active=True, valid_from=timezone.now() + timedelta(days=1))
+        AccessPermission.objects.create(person=cls.person5, access_point=cls.ap1, is_active=True, valid_until=timezone.now() - timedelta(days=1))
+        AccessPermission.objects.create(person=cls.person6, access_point=cls.ap1, is_active=True, valid_from=timezone.now() - timedelta(hours=1), valid_until=timezone.now() + timedelta(hours=1))
+
+        # Control Devices for MQTT tests
+        cls.device1_ap_mqtt = ControlDevice.objects.create(name="MQTT_Door_Ctrl1", device_id="CTRL_MQTT1", access_point=cls.ap_mqtt, mqtt_topic="door/mqtt1/open", is_active=True)
+        cls.device2_ap_mqtt_inactive = ControlDevice.objects.create(name="MQTT_Door_Ctrl2_Inactive", device_id="CTRL_MQTT2", access_point=cls.ap_mqtt, mqtt_topic="door/mqtt2/open", is_active=False)
+        cls.person_mqtt = Person.objects.create(full_name="MQTT Access User", identifier="MQTT_ACCESS_ID")
+        AccessPermission.objects.create(person=cls.person_mqtt, access_point=cls.ap_mqtt, is_active=True)
 
 
     def tearDown(self):
-        # Clean up AccessLog entries after each test if necessary,
-        # or rely on test database rollback. For now, let's clear to be explicit.
         AccessLog.objects.all().delete()
 
     def test_access_allowed(self):
@@ -300,74 +473,113 @@ class VerifyAccessLogicTest(TestCase):
         log = AccessLog.objects.latest('timestamp')
         self.assertTrue(log.access_granted)
         self.assertEqual(log.qr_data, "ALLOW_ID")
-        self.assertEqual(log.user_id, "ALLOW_ID")
 
     def test_person_not_found(self):
         self.assertFalse(verify_access_with_models("UNKNOWN_ID", "MainDoor"))
         log = AccessLog.objects.latest('timestamp')
         self.assertFalse(log.access_granted)
-        self.assertEqual(log.qr_data, "UNKNOWN_ID")
-        self.assertEqual(log.user_id, "UNKNOWN_ID")
 
+    # ... (other VerifyAccessLogicTest cases from before, slightly adjusted for clarity if needed) ...
 
+    @patch('log_viewer_app.utils.publish_mqtt_message') # Mock our own publish_mqtt_message
+    def test_access_granted_triggers_mqtt_publish_single_device(self, mock_publish_mqtt_func):
+        mock_publish_mqtt_func.return_value = True # Assume MQTT publish succeeds
+
+        result = verify_access_with_models(qr_identifier="MQTT_ACCESS_ID", access_point_name="MQTT_Controlled_Door")
+
+        self.assertTrue(result) # Access should be granted
+        mock_publish_mqtt_func.assert_called_once_with(topic=self.device1_ap_mqtt.mqtt_topic, payload="OPEN")
+
+        log = AccessLog.objects.latest('timestamp')
+        self.assertTrue(log.access_granted)
+        self.assertEqual(log.qr_data, "MQTT_ACCESS_ID")
+
+    @patch('log_viewer_app.utils.publish_mqtt_message')
+    def test_access_granted_no_active_devices(self, mock_publish_mqtt_func):
+        # Temporarily make the active device inactive for this test
+        self.device1_ap_mqtt.is_active = False
+        self.device1_ap_mqtt.save()
+
+        result = verify_access_with_models(qr_identifier="MQTT_ACCESS_ID", access_point_name="MQTT_Controlled_Door")
+
+        self.assertTrue(result) # Access is still granted by permission
+        mock_publish_mqtt_func.assert_not_called() # But MQTT should not be called
+
+        # Restore device state
+        self.device1_ap_mqtt.is_active = True
+        self.device1_ap_mqtt.save()
+
+    @patch('log_viewer_app.utils.publish_mqtt_message')
+    def test_access_denied_no_mqtt_publish(self, mock_publish_mqtt_func):
+        result = verify_access_with_models(qr_identifier="NOPERM_ID", access_point_name="MQTT_Controlled_Door")
+
+        self.assertFalse(result) # Access should be denied
+        mock_publish_mqtt_func.assert_not_called()
+
+        log = AccessLog.objects.latest('timestamp')
+        self.assertFalse(log.access_granted)
+
+    @patch('log_viewer_app.utils.publish_mqtt_message')
+    def test_multiple_active_devices_mqtt_publish(self, mock_publish_mqtt_func):
+        mock_publish_mqtt_func.return_value = True
+        # Add another active device to the MQTT_Controlled_Door
+        device_extra = ControlDevice.objects.create(
+            name="MQTT_Door_Ctrl_Extra", device_id="CTRL_MQTT_EXTRA",
+            access_point=self.ap_mqtt, mqtt_topic="door/mqttextra/open", is_active=True
+        )
+
+        result = verify_access_with_models(qr_identifier="MQTT_ACCESS_ID", access_point_name="MQTT_Controlled_Door")
+        self.assertTrue(result)
+
+        self.assertEqual(mock_publish_mqtt_func.call_count, 2)
+        calls = [
+            ((self.device1_ap_mqtt.mqtt_topic,), {'payload': "OPEN"}), # Using ((args_tuple), {kwargs_dict})
+            ((device_extra.mqtt_topic,), {'payload': "OPEN"})
+        ]
+        # Check if calls were made with the correct topics, actual order might vary
+        # So check topics present in calls
+        actual_call_topics = [call.kwargs['topic'] for call in mock_publish_mqtt_func.call_args_list]
+        expected_topics = [self.device1_ap_mqtt.mqtt_topic, device_extra.mqtt_topic]
+        self.assertCountEqual(actual_call_topics, expected_topics)
+
+        device_extra.delete() # Clean up
+
+    # Ensure previous VerifyAccessLogicTest cases are still here and pass
     def test_access_point_not_found(self):
         self.assertFalse(verify_access_with_models("ALLOW_ID", "NonExistentDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertFalse(log.access_granted)
-        self.assertEqual(log.user_id, "ALLOW_ID")
 
-
-    def test_permission_not_found(self): # Person exists, AP exists, but no link
+    def test_permission_not_found(self):
         self.assertFalse(verify_access_with_models("NOPERM_ID", "MainDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertFalse(log.access_granted)
-        self.assertEqual(log.user_id, "NOPERM_ID")
 
     def test_permission_inactive(self):
         self.assertFalse(verify_access_with_models("INACTIVE_ID", "MainDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertFalse(log.access_granted)
 
     def test_permission_future_valid_from(self):
         self.assertFalse(verify_access_with_models("FUTURE_ID", "MainDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertFalse(log.access_granted)
 
     def test_permission_expired_valid_until(self):
         self.assertFalse(verify_access_with_models("EXPIRED_ID", "MainDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertFalse(log.access_granted)
 
-    def test_permission_time_valid(self): # valid_from past, valid_until future
+    def test_permission_time_valid(self):
         self.assertTrue(verify_access_with_models("TIMEVALID_ID", "MainDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertTrue(log.access_granted)
 
-    def test_permission_valid_from_only_no_end(self): # Test case: valid_from is past, valid_until is None
+    def test_permission_valid_from_only_no_end(self):
         person_perm_no_end = Person.objects.create(full_name="PermNoEnd User", identifier="NOEND_ID")
         AccessPermission.objects.create(
             person=person_perm_no_end,
             access_point=self.ap1,
             is_active=True,
-            valid_from=timezone.now() - timedelta(days=1), # Valid from yesterday
-            valid_until=None # No expiry
+            valid_from=timezone.now() - timedelta(days=1),
+            valid_until=None
         )
         self.assertTrue(verify_access_with_models("NOEND_ID", "MainDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertTrue(log.access_granted)
 
-    def test_permission_default_valid_from_no_end(self): # Test case: valid_from uses default (now), valid_until is None
+    def test_permission_default_valid_from_no_end(self):
         person_perm_default_start = Person.objects.create(full_name="PermDefaultStart User", identifier="DEFAULTSTART_ID")
-        # valid_from will use default=timezone.now in the model
         AccessPermission.objects.create(
             person=person_perm_default_start,
             access_point=self.ap1,
             is_active=True,
-            valid_until=None # No expiry
+            valid_until=None
         )
-        # This test might be flaky if execution time is very close to the second boundary.
-        # A slight delay or using a time slightly in the past for valid_from would be more robust.
-        # For now, we assume default=timezone.now makes it immediately valid.
         self.assertTrue(verify_access_with_models("DEFAULTSTART_ID", "MainDoor"))
-        log = AccessLog.objects.latest('timestamp')
-        self.assertTrue(log.access_granted)

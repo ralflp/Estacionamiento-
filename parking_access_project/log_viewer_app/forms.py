@@ -1,5 +1,5 @@
 from django import forms
-from .models import Person, Vehicle, AccessPermission # AccessPermission es nuevo aquí
+from .models import Person, Vehicle, AccessPermission, ControlDevice # ControlDevice es nuevo aquí
 
 class PersonForm(forms.ModelForm):
     class Meta:
@@ -62,3 +62,26 @@ class AccessPermissionForm(forms.ModelForm):
         # `required=False` para ese campo en el formulario significa que el usuario PUEDE borrarlo
         # y se guardará como None si no se proporciona otro valor y el modelo lo permite (null=True).
         pass # No se necesita personalización activa del __init__ por ahora.
+
+class ControlDeviceForm(forms.ModelForm):
+    class Meta:
+        model = ControlDevice
+        fields = [
+            'name',
+            'device_id',
+            'access_point',
+            'mqtt_topic',
+            'ip_address',
+            'is_active',
+            'notes'
+        ]
+        # Ejemplo de widgets que podrían añadirse para mejorar la apariencia:
+        # widgets = {
+        #     'name': forms.TextInput(attrs={'class': 'form-control'}),
+        #     'device_id': forms.TextInput(attrs={'class': 'form-control'}),
+        #     'access_point': forms.Select(attrs={'class': 'form-control'}),
+        #     'mqtt_topic': forms.TextInput(attrs={'class': 'form-control'}),
+        #     'ip_address': forms.TextInput(attrs={'class': 'form-control'}), # IPInput sería más específico
+        #     'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        #     'notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+        # }

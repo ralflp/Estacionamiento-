@@ -121,3 +121,11 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# MQTT Broker Settings
+MQTT_BROKER_HOST = 'localhost'  # O la IP/hostname de tu broker MQTT
+MQTT_BROKER_PORT = 1883
+MQTT_CLIENT_ID = 'django_parking_access_app'
+# Opcional: credenciales si tu broker las requiere
+# MQTT_USERNAME = 'your_username'
+# MQTT_PASSWORD = 'your_password'

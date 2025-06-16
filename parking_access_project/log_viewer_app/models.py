@@ -68,3 +68,35 @@ class AccessPermission(models.Model):
 
 
         return f"Permiso para {self.person.full_name} en {self.access_point.name} ({status},{validity})"
+
+class ControlDevice(models.Model):
+    name = models.CharField(max_length=150, help_text="Nombre descriptivo para el dispositivo (e.g., 'Controlador Puerta Garaje Izquierda')")
+    device_id = models.CharField(max_length=100, unique=True, help_text="Identificador único del dispositivo (e.g., MAC address, ID de serie del dt-r002)")
+    access_point = models.ForeignKey(
+        AccessPoint,
+        on_delete=models.SET_NULL, # Si se borra el AccessPoint, no borrar el dispositivo, solo desasociarlo o ponerlo a null.
+                                  # Podría ser models.PROTECT si queremos evitar borrar AccessPoints con dispositivos.
+                                  # O models.CASCADE si el dispositivo no tiene sentido sin el AccessPoint.
+                                  # SET_NULL requiere null=True.
+        null=True,
+        blank=True, # Permitir que un dispositivo no esté asignado temporalmente.
+        related_name='control_devices',
+        help_text="Punto de acceso que este dispositivo controla"
+    )
+    mqtt_topic = models.CharField(
+        max_length=255,
+        help_text="Tópico MQTT para enviar comandos a este dispositivo (e.g., 'parking/gate1/control')"
+    )
+    # Considerar un campo para el mensaje MQTT específico de "abrir", si varía por dispositivo.
+    # mqtt_open_payload = models.CharField(max_length=50, default="OPEN", help_text="Payload para el mensaje de abrir")
+
+    ip_address = models.GenericIPAddressField(protocol='both', blank=True, null=True, help_text="Dirección IP del dispositivo (opcional)")
+    is_active = models.BooleanField(default=True, help_text="¿Está este dispositivo actualmente activo y operativo?")
+    notes = models.TextField(blank=True, help_text="Notas adicionales sobre el dispositivo o su configuración")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        ap_name = self.access_point.name if self.access_point else "No asignado"
+        return f"{self.name} ({self.device_id}) - AP: {ap_name}"
