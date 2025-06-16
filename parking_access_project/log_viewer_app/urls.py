@@ -20,7 +20,8 @@ urlpatterns = [
 
     # URLs para el Portal de Usuario
     path('portal/dashboard/', views.user_dashboard_view, name='user_dashboard'),
-    path('portal/qr-scanner/', views.qr_scanner_page_view, name='qr_scanner_page'), # Nueva URL
+    path('portal/qr-scanner/', views.qr_scanner_page_view, name='qr_scanner_page'),
+    path('portal/register-guest/', views.guest_registration_view, name='guest_registration'), # Nueva URL
 
     # URLs para API Endpoints
     path('api/verify-access/', views.AccessVerificationAPIView.as_view(), name='api_verify_access'),

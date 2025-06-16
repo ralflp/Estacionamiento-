@@ -4,7 +4,10 @@ from .models import (
     AccessLog, Person, Vehicle, AccessPoint, AccessPermission,
     ControlDevice, Payment, Service, UserSubscription, Invoice
 )
-from .forms import PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm
+from .forms import (
+    PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm,
+    GuestRegistrationForm # Added
+)
 from .utils import verify_access_with_models, publish_mqtt_message, process_payment_for_access
 from django.utils import timezone
 from datetime import timedelta, date as dt_date, datetime as dt_datetime
@@ -12,7 +15,7 @@ from decimal import Decimal
 from unittest.mock import patch, MagicMock, call as mock_call
 from django.conf import settings
 from django.contrib import admin
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Group # Group added
 from django.contrib.messages.storage.fallback import FallbackStorage
 from .admin import PaymentAdmin
 
@@ -26,9 +29,28 @@ from .serializers import AccessRequestSerializer, AccessResponseSerializer, Acce
 # --- Model Tests ---
 class PersonModelTest(TestCase):
     def test_person_creation(self):
-        person = Person.objects.create(full_name="John Doe", identifier="JD001")
+        user_host = User.objects.create_user(username='hostuser', password='password')
+        host_person = Person.objects.create(user=user_host, full_name="Host Person", identifier="HOST01")
+
+        person = Person.objects.create(
+            full_name="John Doe",
+            identifier="JD001",
+            is_temporary_guest=True,
+            registered_by=host_person
+        )
         self.assertIsInstance(person, Person)
-        self.assertEqual(str(person), "John Doe (JD001)")
+        self.assertEqual(person.full_name, "John Doe")
+        self.assertEqual(person.identifier, "JD001")
+        self.assertTrue(person.is_temporary_guest)
+        self.assertEqual(person.registered_by, host_person)
+        self.assertIsNotNone(person.created_at)
+        self.assertIsNotNone(person.updated_at)
+        self.assertEqual(str(person), "John Doe (JD001) (Invitado Temp.)")
+
+    def test_person_str_not_guest(self):
+        person = Person.objects.create(full_name="Regular Person", identifier="REG01")
+        self.assertEqual(str(person), "Regular Person (REG01)")
+
 
 class VehicleModelTest(TestCase):
     def setUp(self):
@@ -122,6 +144,58 @@ class ControlDeviceFormTest(TestCase):
     def test_control_device_form_invalid_missing_device_id(self): form = ControlDeviceForm(data={'name': 'Test Device No ID'}); self.assertFalse(form.is_valid()); self.assertIn('device_id', form.errors)
     def test_control_device_form_save(self): form = ControlDeviceForm(data={'name': 'Save Device', 'device_id': 'SDEV001', 'access_point': self.ap.pk, 'mqtt_topic': 'save/device/topic'}); self.assertTrue(form.is_valid()); device = form.save(); self.assertIsInstance(device, ControlDevice); self.assertEqual(device.device_id, 'SDEV001')
 
+class GuestRegistrationFormTest(TestCase):
+    def setUp(self):
+        self.ap1 = AccessPoint.objects.create(name="Puerta Principal")
+        self.ap2 = AccessPoint.objects.create(name="Puerta Garaje")
+        Person.objects.create(full_name="Existing User", identifier="EXISTING_ID")
+
+    def test_form_valid_data(self):
+        form_data = {
+            'guest_full_name': "Nuevo Invitado",
+            'guest_identifier': "NEW_GUEST_ID",
+            'access_point': self.ap1.pk,
+            'permission_valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'),
+            'permission_valid_until': (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
+        }
+        form = GuestRegistrationForm(data=form_data)
+        self.assertTrue(form.is_valid(), form.errors.as_text())
+
+    def test_form_guest_identifier_exists(self):
+        form_data = {
+            'guest_full_name': "Otro Invitado",
+            'guest_identifier': "EXISTING_ID", # Este identificador ya existe
+            'access_point': self.ap1.pk,
+            'permission_valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'),
+            'permission_valid_until': (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
+        }
+        form = GuestRegistrationForm(data=form_data)
+        self.assertFalse(form.is_valid())
+        self.assertIn('guest_identifier', form.errors)
+        self.assertIn("Ya existe una persona (empleado o invitado) con este identificador.", form.errors['guest_identifier'])
+
+    def test_form_permission_dates_invalid_order(self):
+        form_data = {
+            'guest_full_name': "Invitado Fechas Mal",
+            'guest_identifier': "GUEST_DATES_BAD",
+            'access_point': self.ap1.pk,
+            'permission_valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'),
+            'permission_valid_until': (timezone.now() - timedelta(days=1)).strftime('%Y-%m-%dT%H:%M') # Hasta < Desde
+        }
+        form = GuestRegistrationForm(data=form_data)
+        self.assertFalse(form.is_valid())
+        self.assertIn('permission_valid_until', form.errors) # O podría estar en non_field_errors si la validación es en clean()
+        self.assertIn("La fecha 'válido hasta' debe ser posterior a la fecha 'válido desde'.", form.errors.get('permission_valid_until', []) + form.non_field_errors())
+
+
+    def test_form_missing_required_fields(self):
+        form = GuestRegistrationForm(data={}) # Sin datos
+        self.assertFalse(form.is_valid())
+        self.assertIn('guest_full_name', form.errors)
+        self.assertIn('guest_identifier', form.errors)
+        self.assertIn('access_point', form.errors)
+        self.assertIn('permission_valid_from', form.errors)
+        self.assertIn('permission_valid_until', form.errors)
 
 # --- View Tests ---
 class AccessLogListViewTest(TestCase):
@@ -404,7 +478,7 @@ class AccessVerificationAPITest(TestCase):
 
 class UserDashboardViewTest(TestCase):
     def setUp(self):
-        self.client = Client() # Use Django's standard test client for web views
+        self.client = Client()
         self.test_user = User.objects.create_user(username='dashboarduser', password='password')
         self.person_profile = Person.objects.create(user=self.test_user, full_name="Dashboard User", identifier="DASH_ID")
         self.ap1 = AccessPoint.objects.create(name="AP Dashboard 1")
@@ -487,3 +561,57 @@ class UserPermissionsListAPITest(TestCase):
     def test_list_permissions_user_no_person_profile(self):
         self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token3.key); response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK); self.assertEqual(len(response.data), 0)
+
+class QRScannerPageViewTest(TestCase): # New Test Class
+    def setUp(self):
+        self.client = Client()
+        self.test_user = User.objects.create_user(username='qrscanneruser', password='password123')
+        self.ap1 = AccessPoint.objects.create(name="Scanner AP Alpha")
+        self.ap2 = AccessPoint.objects.create(name="Scanner AP Beta")
+        self.scanner_url = reverse('log_viewer_app:qr_scanner_page')
+
+    def test_scanner_page_redirects_if_not_logged_in(self):
+        response = self.client.get(self.scanner_url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(settings.LOGIN_URL, response.url)
+
+    def test_scanner_page_authenticated_user_loads_correctly(self):
+        self.client.login(username='qrscanneruser', password='password123')
+        # Token should be created by the view if it doesn't exist
+        token_obj, created = Token.objects.get_or_create(user=self.test_user)
+
+        response = self.client.get(self.scanner_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/qr_scanner_page.html')
+
+        self.assertIn('access_points', response.context)
+        self.assertEqual(len(response.context['access_points']), 2)
+        self.assertQuerySetEqual( # Corrected capitalization
+            response.context['access_points'],
+            AccessPoint.objects.all().order_by('name'),
+            transform=lambda x: x
+        )
+
+        self.assertIn('user_auth_token', response.context)
+        self.assertEqual(response.context['user_auth_token'], token_obj.key)
+
+    def test_scanner_page_no_access_points(self):
+        self.client.login(username='qrscanneruser', password='password123')
+        AccessPoint.objects.all().delete() # Ensure no APs
+        response = self.client.get(self.scanner_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access_points', response.context)
+        self.assertEqual(len(response.context['access_points']), 0)
+
+    def test_scanner_page_token_creation_for_user_without_token(self):
+        new_user = User.objects.create_user(username='newtokenuser', password='password123')
+        self.client.login(username='newtokenuser', password='password123')
+
+        self.assertFalse(Token.objects.filter(user=new_user).exists()) # No token initially
+
+        response = self.client.get(self.scanner_url)
+        self.assertEqual(response.status_code, 200)
+
+        self.assertTrue(Token.objects.filter(user=new_user).exists()) # Token should now exist
+        new_token = Token.objects.get(user=new_user)
+        self.assertEqual(response.context['user_auth_token'], new_token.key)

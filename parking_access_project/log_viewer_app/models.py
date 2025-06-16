@@ -23,11 +23,24 @@ class Person(models.Model):
         related_name='person_profile',
         help_text="Usuario del sistema Django asociado a esta persona (opcional)"
     )
+    is_temporary_guest = models.BooleanField( # Nuevo campo
+        default=False,
+        help_text="Indica si esta persona es un invitado temporal"
+    )
+    registered_by = models.ForeignKey( # Nuevo campo
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='registered_guests',
+        help_text="Usuario o persona anfitriona que registró a este invitado (opcional)"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.full_name} ({self.identifier})"
+        guest_status = " (Invitado Temp.)" if self.is_temporary_guest else ""
+        return f"{self.full_name} ({self.identifier}){guest_status}"
 
 class Vehicle(models.Model):
     owner = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='vehicles', help_text="Propietario del vehículo")

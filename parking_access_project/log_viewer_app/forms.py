@@ -1,15 +1,17 @@
 from django import forms
-from .models import Person, Vehicle, AccessPermission, ControlDevice # ControlDevice es nuevo aquí
+from .models import Person, Vehicle, AccessPermission, ControlDevice, AccessPoint # AccessPoint importado
+# from django.forms.fields import DateTimeField # No es necesario, forms.DateTimeField es suficiente
 
 class PersonForm(forms.ModelForm):
     class Meta:
         model = Person
-        fields = ['full_name', 'identifier']
-        # Se podrían añadir widgets o personalizaciones aquí si fuera necesario
-        # widgets = {
-        #     'full_name': forms.TextInput(attrs={'class': 'form-control'}),
-        #     'identifier': forms.TextInput(attrs={'class': 'form-control'}),
-        # }
+        fields = ['full_name', 'identifier', 'user', 'is_temporary_guest', 'registered_by'] # Campos actualizados de Person
+        # Considerar widgets si se quiere personalizar la apariencia, e.g., para el campo 'user'
+        widgets = {
+            'user': forms.Select(attrs={'class': 'form-control custom-select'}), # Ejemplo
+        }
+        # O excluir campos si no deben ser editables directamente aquí:
+        # exclude = ['registered_by'] # si registered_by se asigna automáticamente en la vista
 
 class VehicleForm(forms.ModelForm):
     class Meta:
@@ -28,40 +30,14 @@ class AccessPermissionForm(forms.ModelForm):
         widgets = {
             'valid_from': forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
             'valid_until': forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
-            # Se podrían añadir clases CSS a otros campos si se desea, como:
-            # 'person': forms.Select(attrs={'class': 'form-control'}),
-            # 'access_point': forms.Select(attrs={'class': 'form-control'}),
-            # 'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Hacer que los campos de fecha no sean obligatorios si blank=True en el modelo.
-        # ModelForm debería manejar 'required' basado en 'blank=True' en el modelo,
-        # pero esta personalización explícita puede ser útil para asegurar la consistencia
-        # del atributo HTML 'required', especialmente con widgets como datetime-local.
-
-        # El modelo AccessPermission tiene blank=True para valid_from y valid_until.
-        # El atributo 'required' del campo del formulario se establece en False por defecto
-        # por ModelForm cuando blank=True.
-        # Sin embargo, si se quiere ser extra explícito o si el widget por defecto no se comporta
-        # como se espera en todos los navegadores para el atributo 'required' visual,
-        # se puede descomentar lo siguiente. Por ahora, confiamos en el comportamiento de ModelForm.
-        #
-        # if 'valid_from' in self.fields:
-        #     self.fields['valid_from'].required = False
-        # if 'valid_until' in self.fields:
-        #     self.fields['valid_until'].required = False
-
-        # Nota: El campo 'valid_from' tiene default=timezone.now en el modelo,
-        # lo que significa que siempre tendrá un valor al crear una nueva instancia
-        # a menos que se anule explícitamente. ModelForm lo pre-rellenará.
-        # La lógica 'required=False' es más para permitir que el usuario borre
-        # el campo en el formulario si eso es un caso de uso válido (y el modelo lo permite).
-        # Dado que `default=timezone.now` está en el modelo para `valid_from`,
-        # `required=False` para ese campo en el formulario significa que el usuario PUEDE borrarlo
-        # y se guardará como None si no se proporciona otro valor y el modelo lo permite (null=True).
-        pass # No se necesita personalización activa del __init__ por ahora.
+        if 'valid_from' in self.fields:
+            self.fields['valid_from'].required = False
+        if 'valid_until' in self.fields:
+            self.fields['valid_until'].required = False
 
 class ControlDeviceForm(forms.ModelForm):
     class Meta:
@@ -75,13 +51,46 @@ class ControlDeviceForm(forms.ModelForm):
             'is_active',
             'notes'
         ]
-        # Ejemplo de widgets que podrían añadirse para mejorar la apariencia:
-        # widgets = {
-        #     'name': forms.TextInput(attrs={'class': 'form-control'}),
-        #     'device_id': forms.TextInput(attrs={'class': 'form-control'}),
-        #     'access_point': forms.Select(attrs={'class': 'form-control'}),
-        #     'mqtt_topic': forms.TextInput(attrs={'class': 'form-control'}),
-        #     'ip_address': forms.TextInput(attrs={'class': 'form-control'}), # IPInput sería más específico
-        #     'is_active': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
-        #     'notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
-        # }
+
+class GuestRegistrationForm(forms.Form):
+    guest_full_name = forms.CharField(label="Nombre completo del invitado", max_length=200)
+    guest_identifier = forms.CharField(label="Identificador del invitado (e.g., DNI, email)", max_length=100)
+
+    access_point = forms.ModelChoiceField(
+        queryset=AccessPoint.objects.all().order_by('name'),
+        label="Punto de Acceso a conceder"
+    )
+    permission_valid_from = forms.DateTimeField(
+        label="Permiso válido desde",
+        widget=forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
+        help_text="Fecha y hora de inicio del permiso."
+    )
+    permission_valid_until = forms.DateTimeField(
+        label="Permiso válido hasta",
+        widget=forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
+        help_text="Fecha y hora de fin del permiso."
+    )
+
+    def clean_guest_identifier(self):
+        identifier = self.cleaned_data.get('guest_identifier')
+        if Person.objects.filter(identifier=identifier).exists():
+            # Podríamos ser más específicos: si es un invitado temporal activo, o un usuario permanente.
+            # Por ahora, cualquier identificador existente es un conflicto para un nuevo invitado.
+            raise forms.ValidationError("Ya existe una persona (empleado o invitado) con este identificador.")
+        return identifier
+
+    def clean(self):
+        cleaned_data = super().clean()
+        valid_from = cleaned_data.get('permission_valid_from')
+        valid_until = cleaned_data.get('permission_valid_until')
+
+        if valid_from and valid_until and valid_until <= valid_from:
+            self.add_error('permission_valid_until',
+                           "La fecha 'válido hasta' debe ser posterior a la fecha 'válido desde'.")
+
+        # Validar que la fecha de inicio no sea en el pasado (opcional, pero buena práctica)
+        # from django.utils import timezone
+        # if valid_from and valid_from < timezone.now():
+        #     self.add_error('permission_valid_from', "La fecha de inicio del permiso no puede ser en el pasado.")
+
+        return cleaned_data
