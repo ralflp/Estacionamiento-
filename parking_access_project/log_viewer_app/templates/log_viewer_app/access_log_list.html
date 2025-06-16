@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ page_title|default:"Registros de Acceso" }}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .permitido { color: green; }
+        .denegado { color: red; }
+    </style>
+</head>
+<body>
+    <h1>{{ page_title|default:"Registros de Acceso" }}</h1>
+
+    {% if access_logs %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Datos del QR</th>
+                    <th>Acceso</th>
+                    <th>Tipo de Evento</th>
+                    <th>ID de Usuario</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in access_logs %}
+                    <tr>
+                        <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                        <td>{{ log.qr_data }}</td>
+                        <td class="{% if log.access_granted %}permitido{% else %}denegado{% endif %}">
+                            {% if log.access_granted %}
+                                Permitido
+                            {% else %}
+                                Denegado
+                            {% endif %}
+                        </td>
+                        <td>{{ log.event_type }}</td>
+                        <td>{{ log.user_id|default:"N/A" }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>No hay registros de acceso para mostrar.</p>
+    {% endif %}
+</body>
+</html>
