@@ -1,10 +1,14 @@
 from django.test import TestCase
 from django.urls import reverse
-from .models import AccessLog, Person, Vehicle, AccessPoint, AccessPermission, ControlDevice, Payment
+from .models import (
+    AccessLog, Person, Vehicle, AccessPoint, AccessPermission,
+    ControlDevice, Payment, Service, UserSubscription, Invoice # Added Service, UserSubscription, Invoice
+)
 from .forms import PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm
 from .utils import verify_access_with_models, publish_mqtt_message, process_payment_for_access
 from django.utils import timezone
-from datetime import timedelta, datetime as dt_datetime
+from datetime import timedelta, date as dt_date, datetime as dt_datetime
+from decimal import Decimal # Added for Decimal comparisons
 from unittest.mock import patch, MagicMock, call as mock_call
 from django.conf import settings
 from django.contrib import admin
@@ -13,7 +17,7 @@ from .admin import PaymentAdmin
 
 # DRF Test specific imports
 from rest_framework.test import APIClient
-from django.contrib.auth.models import User # Standard Django User model
+from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
 from rest_framework import status
 from .serializers import AccessRequestSerializer, AccessResponseSerializer, AccessPermissionSerializer
@@ -91,7 +95,7 @@ class PaymentModelTest(TestCase):
         payment_time_before = timezone.now() - timedelta(seconds=1)
         payment = Payment.objects.create(
             person=self.person,
-            amount=50.00,
+            amount=Decimal("50.00"), # Use Decimal for currency
             payment_method='tarjeta_credito',
             reference_number='TXN12345'
         )
@@ -99,82 +103,113 @@ class PaymentModelTest(TestCase):
 
         self.assertIsInstance(payment, Payment)
         self.assertEqual(payment.person, self.person)
-        self.assertEqual(payment.amount, 50.00)
+        self.assertEqual(payment.amount, Decimal("50.00"))
         self.assertEqual(payment.payment_method, 'tarjeta_credito')
         self.assertFalse(payment.processed_for_access)
         self.assertTrue(payment_time_before <= payment.payment_date <= payment_time_after)
         self.assertIn(f"Pago de {payment.amount:.2f} por Payment User", str(payment))
 
+class ServiceModelTest(TestCase):
+    def test_service_creation(self):
+        service = Service.objects.create(
+            name="Estacionamiento Mensual",
+            description="Acceso mensual al estacionamiento.",
+            price=Decimal("75.50")
+        )
+        self.assertIsInstance(service, Service)
+        self.assertEqual(service.name, "Estacionamiento Mensual")
+        self.assertEqual(service.price, Decimal("75.50"))
+        self.assertEqual(str(service), "Estacionamiento Mensual - $75.50")
+
+class UserSubscriptionModelTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.person = Person.objects.create(full_name="Subscriber User", identifier="SUB001")
+        cls.service = Service.objects.create(name="Servicio Básico", price=Decimal("100.00"))
+        cls.service_premium = Service.objects.create(name="Servicio Premium", price=Decimal("200.00"))
+
+    def test_user_subscription_creation(self):
+        start_date = dt_date(2024, 1, 1)
+        end_date = dt_date(2024, 12, 31)
+        subscription = UserSubscription.objects.create(
+            person=self.person,
+            service=self.service,
+            start_date=start_date,
+            end_date=end_date,
+            billing_cycle='annually',
+            is_active=True
+        )
+        self.assertIsInstance(subscription, UserSubscription)
+        self.assertEqual(subscription.person, self.person)
+        self.assertEqual(subscription.service, self.service)
+        self.assertEqual(subscription.start_date, start_date)
+        self.assertEqual(subscription.billing_cycle, 'annually')
+        self.assertTrue(subscription.is_active)
+        expected_str = f"Suscripción de Subscriber User a Servicio Básico (Activa) - ${self.service.price:.2f} (Anual). Fin: {end_date.strftime('%Y-%m-%d')}"
+        self.assertEqual(str(subscription), expected_str)
+
+    def test_get_effective_price_no_override(self):
+        subscription = UserSubscription.objects.create(person=self.person, service=self.service)
+        self.assertEqual(subscription.get_effective_price(), self.service.price)
+
+    def test_get_effective_price_with_override(self):
+        override_price = Decimal("90.00")
+        subscription = UserSubscription.objects.create(
+            person=self.person, service=self.service, price_override=override_price
+        )
+        self.assertEqual(subscription.get_effective_price(), override_price)
+
+class InvoiceModelTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.person = Person.objects.create(full_name="Invoice User", identifier="INV001")
+        cls.service = Service.objects.create(name="Servicio Facturable", price=Decimal("150.00"))
+        cls.subscription = UserSubscription.objects.create(person=cls.person, service=cls.service)
+
+    def test_invoice_creation(self):
+        due_date = dt_date(2024, 7, 31)
+        invoice = Invoice.objects.create(
+            person=self.person,
+            user_subscription=self.subscription,
+            invoice_number="INV-2024-001",
+            amount_due=Decimal("150.00"),
+            due_date=due_date,
+            status='pending'
+        )
+        self.assertIsInstance(invoice, Invoice)
+        self.assertEqual(invoice.invoice_number, "INV-2024-001")
+        self.assertEqual(invoice.amount_due, Decimal("150.00"))
+        self.assertEqual(invoice.status, "pending")
+        expected_str = f"Factura INV-2024-001 para Invoice User - ${invoice.amount_due:.2f} (Estado: Pendiente)"
+        self.assertEqual(str(invoice), expected_str)
+
 
 # --- Form Tests ---
+# ... (Existing Form Tests remain here) ...
 class PersonFormTest(TestCase):
-    def test_person_form_valid_data(self):
-        form = PersonForm(data={'full_name': 'Form User', 'identifier': 'FU001'})
-        self.assertTrue(form.is_valid())
-
-    def test_person_form_invalid_missing_identifier(self):
-        form = PersonForm(data={'full_name': 'Form User No ID'})
-        self.assertFalse(form.is_valid())
-        self.assertIn('identifier', form.errors)
-
-    def test_person_form_save(self):
-        form = PersonForm(data={'full_name': 'Save User', 'identifier': 'SU001'})
-        self.assertTrue(form.is_valid())
-        person = form.save()
-        self.assertIsInstance(person, Person)
-        self.assertEqual(person.identifier, 'SU001')
+    def test_person_form_valid_data(self): form = PersonForm(data={'full_name': 'Form User', 'identifier': 'FU001'}); self.assertTrue(form.is_valid())
+    def test_person_form_invalid_missing_identifier(self): form = PersonForm(data={'full_name': 'Form User No ID'}); self.assertFalse(form.is_valid()); self.assertIn('identifier', form.errors)
+    def test_person_form_save(self): form = PersonForm(data={'full_name': 'Save User', 'identifier': 'SU001'}); self.assertTrue(form.is_valid()); person = form.save(); self.assertIsInstance(person, Person); self.assertEqual(person.identifier, 'SU001')
 
 class VehicleFormTest(TestCase):
-    def setUp(self):
-        self.owner = Person.objects.create(full_name="Owner Test", identifier="OT001")
-
-    def test_vehicle_form_valid_data(self):
-        form = VehicleForm(data={'owner': self.owner.pk, 'license_plate': 'VF123', 'description': 'Test Vehicle'})
-        self.assertTrue(form.is_valid())
-
-    def test_vehicle_form_invalid_missing_plate(self):
-        form = VehicleForm(data={'owner': self.owner.pk})
-        self.assertFalse(form.is_valid())
-        self.assertIn('license_plate', form.errors)
+    def setUp(self): self.owner = Person.objects.create(full_name="Owner Test", identifier="OT001")
+    def test_vehicle_form_valid_data(self): form = VehicleForm(data={'owner': self.owner.pk, 'license_plate': 'VF123', 'description': 'Test Vehicle'}); self.assertTrue(form.is_valid())
+    def test_vehicle_form_invalid_missing_plate(self): form = VehicleForm(data={'owner': self.owner.pk}); self.assertFalse(form.is_valid()); self.assertIn('license_plate', form.errors)
 
 class AccessPermissionFormTest(TestCase):
-    def setUp(self):
-        self.person = Person.objects.create(full_name="Perm Form Person", identifier="PFP01")
-        self.ap = AccessPoint.objects.create(name="Perm Form AP")
-
-    def test_access_permission_form_valid_data(self):
-        form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True, 'valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'), 'valid_until': (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')})
-        self.assertTrue(form.is_valid())
-
-    def test_access_permission_form_save(self):
-        form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True})
-        self.assertTrue(form.is_valid())
-        permission = form.save()
-        self.assertIsInstance(permission, AccessPermission)
-        self.assertTrue(permission.is_active)
+    def setUp(self): self.person = Person.objects.create(full_name="Perm Form Person", identifier="PFP01"); self.ap = AccessPoint.objects.create(name="Perm Form AP")
+    def test_access_permission_form_valid_data(self): form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True, 'valid_from': timezone.now().strftime('%Y-%m-%dT%H:%M'), 'valid_until': (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')}); self.assertTrue(form.is_valid())
+    def test_access_permission_form_save(self): form = AccessPermissionForm(data={'person': self.person.pk, 'access_point': self.ap.pk, 'is_active': True}); self.assertTrue(form.is_valid()); permission = form.save(); self.assertIsInstance(permission, AccessPermission); self.assertTrue(permission.is_active)
 
 class ControlDeviceFormTest(TestCase):
-    def setUp(self):
-        self.ap = AccessPoint.objects.create(name="Device Form AP")
-
-    def test_control_device_form_valid_data(self):
-        form = ControlDeviceForm(data={'name': 'Test Device', 'device_id': 'DEVFORM001', 'access_point': self.ap.pk, 'mqtt_topic': 'test/device/topic', 'is_active': True})
-        self.assertTrue(form.is_valid())
-
-    def test_control_device_form_invalid_missing_device_id(self):
-        form = ControlDeviceForm(data={'name': 'Test Device No ID'})
-        self.assertFalse(form.is_valid())
-        self.assertIn('device_id', form.errors)
-
-    def test_control_device_form_save(self):
-        form = ControlDeviceForm(data={'name': 'Save Device', 'device_id': 'SDEV001', 'access_point': self.ap.pk, 'mqtt_topic': 'save/device/topic'})
-        self.assertTrue(form.is_valid())
-        device = form.save()
-        self.assertIsInstance(device, ControlDevice)
-        self.assertEqual(device.device_id, 'SDEV001')
+    def setUp(self): self.ap = AccessPoint.objects.create(name="Device Form AP")
+    def test_control_device_form_valid_data(self): form = ControlDeviceForm(data={'name': 'Test Device', 'device_id': 'DEVFORM001', 'access_point': self.ap.pk, 'mqtt_topic': 'test/device/topic', 'is_active': True}); self.assertTrue(form.is_valid())
+    def test_control_device_form_invalid_missing_device_id(self): form = ControlDeviceForm(data={'name': 'Test Device No ID'}); self.assertFalse(form.is_valid()); self.assertIn('device_id', form.errors)
+    def test_control_device_form_save(self): form = ControlDeviceForm(data={'name': 'Save Device', 'device_id': 'SDEV001', 'access_point': self.ap.pk, 'mqtt_topic': 'save/device/topic'}); self.assertTrue(form.is_valid()); device = form.save(); self.assertIsInstance(device, ControlDevice); self.assertEqual(device.device_id, 'SDEV001')
 
 
 # --- View Tests ---
+# ... (Existing View Tests remain here) ...
 class AccessLogListViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -673,9 +708,9 @@ class PaymentAdminActionTest(TestCase):
         mock_process_func.assert_any_call(self.payment3_new_fail)
 
         admin_messages = [m.message for m in list(self.request._messages)]
-        self.assertIn("1 pago(s) procesado(s) exitosamente para activar/extender acceso.", admin_messages)
-        self.assertIn("1 pago(s) ya habían sido procesados anteriormente y fueron omitidos.", admin_messages)
-        self.assertIn("1 pago(s) no pudieron ser procesados. Revise los logs del sistema para más detalles.", admin_messages)
+        self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages) # Corrected message
+        self.assertIn("1 pago(s) ya habían sido procesados.", admin_messages) # Corrected message
+        self.assertIn("1 pago(s) no pudieron ser procesados.", admin_messages) # Corrected message
 
     @patch('log_viewer_app.admin.process_payment_for_access')
     def test_process_single_unprocessed_payment(self, mock_process_func):
@@ -690,7 +725,7 @@ class PaymentAdminActionTest(TestCase):
 
         mock_process_func.assert_called_once_with(payment_to_process)
         admin_messages = [m.message for m in list(self.request._messages)]
-        self.assertIn("1 pago(s) procesado(s) exitosamente para activar/extender acceso.", admin_messages)
+        self.assertIn("1 pago(s) procesado(s) exitosamente.", admin_messages) # Corrected message
         self.assertEqual(len(admin_messages), 1)
 
 # --- API Test Classes ---

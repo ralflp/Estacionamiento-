@@ -1,6 +1,6 @@
 from django.db import models
 from django.utils import timezone
-from django.conf import settings # Added for settings.AUTH_USER_MODEL
+from django.conf import settings
 
 class AccessLog(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
@@ -15,7 +15,7 @@ class AccessLog(models.Model):
 class Person(models.Model):
     full_name = models.CharField(max_length=200, help_text="Nombre completo de la persona")
     identifier = models.CharField(max_length=100, unique=True, help_text="Identificador único (e.g., DNI, ID de empleado)")
-    user = models.OneToOneField( # New field
+    user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
@@ -80,8 +80,56 @@ class ControlDevice(models.Model):
         ap_name = self.access_point.name if self.access_point else "No asignado"
         return f"{self.name} ({self.device_id}) - AP: {ap_name}"
 
+class Service(models.Model):
+    name = models.CharField(max_length=150, unique=True, help_text="Nombre del servicio o producto (e.g., 'Estacionamiento Mensual', 'Tarjeta de Acceso')")
+    description = models.TextField(blank=True, null=True, help_text="Descripción detallada del servicio")
+    price = models.DecimalField(max_digits=10, decimal_places=2, help_text="Precio base del servicio")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    def __str__(self):
+        return f"{self.name} - ${self.price:.2f}"
+
+class UserSubscription(models.Model):
+    BILLING_CYCLE_CHOICES = [('once', 'Pago Único'), ('monthly', 'Mensual'), ('quarterly', 'Trimestral'), ('annually', 'Anual'), ('other', 'Otro')]
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='subscriptions', help_text="Persona asociada a esta suscripción")
+    service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name='subscriptions', help_text="Servicio al que está suscrita la persona")
+    start_date = models.DateField(default=timezone.now, help_text="Fecha de inicio de la suscripción")
+    end_date = models.DateField(null=True, blank=True, help_text="Fecha de fin de la suscripción (opcional)")
+    billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='monthly', help_text="Ciclo de facturación")
+    price_override = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Precio especial para esta suscripción")
+    is_active = models.BooleanField(default=True, help_text="Indica si esta suscripción está actualmente activa")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        ordering = ['-start_date', 'person__full_name']
+    def get_effective_price(self):
+        if self.price_override is not None: return self.price_override
+        return self.service.price
+    def __str__(self):
+        status = "Activa" if self.is_active else "Inactiva"; price_info = self.get_effective_price()
+        end_date_str = self.end_date.strftime('%Y-%m-%d') if self.end_date else "Indefinida"
+        return f"Suscripción de {self.person.full_name} a {self.service.name} ({status}) - ${price_info:.2f} ({self.get_billing_cycle_display()}). Fin: {end_date_str}"
+
+class Invoice(models.Model):
+    STATUS_CHOICES = [('draft', 'Borrador'), ('pending', 'Pendiente'), ('paid', 'Pagada'), ('overdue', 'Vencida'), ('cancelled', 'Cancelada'), ('partial', 'Parcialmente Pagada')]
+    person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name='invoices', help_text="Persona a la que se emite la factura")
+    user_subscription = models.ForeignKey(UserSubscription, on_delete=models.SET_NULL, null=True, blank=True, related_name='invoices', help_text="Suscripción asociada a esta factura (opcional)")
+    invoice_number = models.CharField(max_length=50, unique=True, help_text="Número de factura único")
+    amount_due = models.DecimalField(max_digits=10, decimal_places=2, help_text="Monto total a pagar")
+    due_date = models.DateField(help_text="Fecha de vencimiento para el pago")
+    paid_date = models.DateField(null=True, blank=True, help_text="Fecha en que se completó el pago (opcional)")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', help_text="Estado actual de la factura")
+    notes = models.TextField(blank=True, null=True, help_text="Notas o comentarios adicionales (opcional)")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        ordering = ['-due_date', 'person__full_name']
+    def __str__(self):
+        return f"Factura {self.invoice_number} para {self.person.full_name} - ${self.amount_due:.2f} (Estado: {self.get_status_display()})"
+
 class Payment(models.Model):
     person = models.ForeignKey(Person, on_delete=models.SET_NULL, null=True, blank=False, related_name='payments', help_text="Persona que realizó el pago")
+    invoice = models.ForeignKey(Invoice, on_delete=models.SET_NULL, null=True, blank=True, related_name='payments_made', help_text="Factura a la que se aplica este pago (opcional)")
     amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Monto del pago")
     payment_date = models.DateTimeField(default=timezone.now, help_text="Fecha y hora en que se registró el pago")
     payment_method = models.CharField(max_length=50, default="efectivo", choices=[('efectivo', 'Efectivo'), ('tarjeta_credito', 'Tarjeta de Crédito'), ('tarjeta_debito', 'Tarjeta de Débito'), ('transferencia', 'Transferencia Bancaria'), ('paypal', 'PayPal'), ('otro', 'Otro')], help_text="Método de pago utilizado")
@@ -92,4 +140,5 @@ class Payment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     def __str__(self):
         person_name = self.person.full_name if self.person else "N/A"
-        return f"Pago de {self.amount:.2f} por {person_name} el {self.payment_date.strftime('%Y-%m-%d %H:%M')}"
+        invoice_info = f" para Factura {self.invoice.invoice_number}" if self.invoice else ""
+        return f"Pago de {self.amount:.2f} por {person_name} el {self.payment_date.strftime('%Y-%m-%d %H:%M')}{invoice_info}"
