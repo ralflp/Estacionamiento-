@@ -18,8 +18,9 @@ urlpatterns = [
     path('control-devices/add/', views.control_device_create_view, name='control_device_create'),
     path('control-devices/<int:pk>/update/', views.control_device_update_view, name='control_device_update'),
 
-    # Nueva URL para el Portal de Usuario
+    # URLs para el Portal de Usuario
     path('portal/dashboard/', views.user_dashboard_view, name='user_dashboard'),
+    path('portal/qr-scanner/', views.qr_scanner_page_view, name='qr_scanner_page'), # Nueva URL
 
     # URLs para API Endpoints
     path('api/verify-access/', views.AccessVerificationAPIView.as_view(), name='api_verify_access'),

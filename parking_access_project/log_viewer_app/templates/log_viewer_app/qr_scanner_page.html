@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ page_title|default:"Escáner QR" }}</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; display: flex; flex-direction: column; align-items: center; }
+        #scanner-container { border: 1px solid #ccc; padding: 20px; border-radius: 8px; background-color: #f9f9f9; text-align: center; }
+        #video-container { position: relative; width: 320px; height: 240px; margin: auto; border: 1px solid #ddd; margin-bottom:15px; background-color: #333; }
+        #qr-video { width: 100%; height: 100%; object-fit: cover; }
+        #qr-canvas { display: none; }
+        .controls { margin-bottom: 15px; }
+        label { margin-right: 10px; }
+        select, button { padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
+        #scan-result { margin-top: 15px; padding: 10px; border: 1px dashed #ccc; min-height: 50px; background-color: #fff; text-align: left;}
+        .scan-success { color: green; font-weight: bold; }
+        .scan-error { color: red; font-weight: bold; }
+        .scan-info { color: blue; }
+        #detection-box { /* Opcional, si se usa para dibujar el cuadro */
+            position: absolute;
+            border: 2px solid red;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="scanner-container">
+        <h1>{{ page_title|default:"Escáner de Códigos QR" }}</h1>
+
+        {% if user.is_authenticated %}
+            <div class="controls">
+                <label for="access-point-select">Punto de Acceso:</label>
+                <select id="access-point-select">
+                    {% if access_points %}
+                        {% for ap in access_points %}
+                            <option value="{{ ap.name }}">{{ ap.name }}</option>
+                        {% endfor %}
+                    {% else %}
+                        <option value="">No hay puntos de acceso configurados</option>
+                    {% endif %}
+                </select>
+                <button id="start-scan-btn" style="margin-left: 10px;">Iniciar Escáner</button>
+                <button id="stop-scan-btn" style="display: none;">Detener Escáner</button>
+            </div>
+
+            <div id="video-container">
+                <video id="qr-video" playsinline autoplay muted></video>
+                {# <div id="detection-box"></div> #}
+            </div>
+            <canvas id="qr-canvas"></canvas>
+
+            <h3>Resultado del Escaneo:</h3>
+            <div id="scan-result">
+                <p>Esperando código QR...</p>
+            </div>
+
+            <script type="text/javascript">
+                const USER_API_TOKEN = "{{ user_auth_token|escapejs }}";
+                const VERIFY_ACCESS_API_URL = "{% url 'log_viewer_app:api_verify_access' %}";
+                const CSRF_TOKEN = "{{ csrf_token }}"; // Para el header X-CSRFToken
+            </script>
+        {% else %}
+            <p>Debes <a href="{% url 'login' %}?next={{ request.path|urlencode }}">iniciar sesión</a> para usar el escáner.</p>
+        {% endif %}
+    </div>
+
+    {% if user.is_authenticated %}
+    <script type="text/javascript">
+        const video = document.getElementById('qr-video');
+        const canvasElement = document.getElementById('qr-canvas');
+        const canvas = canvasElement.getContext('2d');
+        const scanResultDiv = document.getElementById('scan-result');
+        const startScanBtn = document.getElementById('start-scan-btn');
+        const stopScanBtn = document.getElementById('stop-scan-btn');
+        const accessPointSelect = document.getElementById('access-point-select');
+        // const detectionBox = document.getElementById('detection-box');
+
+        let stream = null;
+        let animationFrameId = null;
+        let isScanning = false;
+        let lastQrCodeData = null;
+        let lastQrCodeTime = 0;
+        const COOLDOWN_PERIOD = 3000;
+
+        function drawLine(begin, end, color) {
+            canvas.beginPath();
+            canvas.moveTo(begin.x, begin.y);
+            canvas.lineTo(end.x, end.y);
+            canvas.lineWidth = 4;
+            canvas.strokeStyle = color;
+            canvas.stroke();
+        }
+
+        function tick() {
+            if (!isScanning || !stream || video.readyState !== video.HAVE_ENOUGH_DATA) {
+                if (isScanning && stream) animationFrameId = requestAnimationFrame(tick);
+                return;
+            }
+
+            canvasElement.height = video.videoHeight;
+            canvasElement.width = video.videoWidth;
+            canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+            const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: "dontInvert",
+            });
+
+            if (code && code.data) { // Asegurarse que code.data exista
+                // drawLine(code.location.topLeftCorner, code.location.topRightCorner, "#FF3B58");
+                // drawLine(code.location.topRightCorner, code.location.bottomRightCorner, "#FF3B58");
+                // drawLine(code.location.bottomRightCorner, code.location.bottomLeftCorner, "#FF3B58");
+                // drawLine(code.location.bottomLeftCorner, code.location.topLeftCorner, "#FF3B58");
+
+                const currentTime = Date.now();
+                if (code.data !== lastQrCodeData || (currentTime - lastQrCodeTime > COOLDOWN_PERIOD)) {
+                    lastQrCodeData = code.data;
+                    lastQrCodeTime = currentTime;
+                    scanResultDiv.innerHTML = `<p class="scan-info">QR Detectado: ${code.data}. Verificando acceso...</p>`;
+                    isScanning = false;
+                    stopScanBtn.style.display = 'none';
+
+                    verifyAccessWithAPI(code.data);
+                }
+            }
+            if(isScanning) {
+               animationFrameId = requestAnimationFrame(tick);
+            }
+        }
+
+        async function verifyAccessWithAPI(qrIdentifier) {
+            const accessPointName = accessPointSelect.value;
+            if (!accessPointName) {
+                scanResultDiv.innerHTML = '<p class="scan-error">Error: Por favor, selecciona un Punto de Acceso.</p>';
+                startScanBtn.style.display = 'inline-block'; // Permitir reiniciar
+                isScanning = false; // Detener si estaba activo
+                return;
+            }
+            if (!USER_API_TOKEN) {
+                scanResultDiv.innerHTML = '<p class="scan-error">Error: Token de API no disponible. Inicia sesión de nuevo.</p>';
+                startScanBtn.style.display = 'inline-block';
+                isScanning = false;
+                return;
+            }
+
+            try {
+                const response = await fetch(VERIFY_ACCESS_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Token ${USER_API_TOKEN}`,
+                        'X-CSRFToken': CSRF_TOKEN
+                    },
+                    body: JSON.stringify({
+                        qr_identifier: qrIdentifier,
+                        access_point_name: accessPointName
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    if (result.access_granted) {
+                        scanResultDiv.innerHTML = `<p class="scan-success">Acceso Permitido para ${result.person_name || qrIdentifier} en ${result.access_point_name}.</p>`;
+                    } else {
+                        scanResultDiv.innerHTML = `<p class="scan-error">Acceso Denegado. ${result.message || ''}</p>`;
+                    }
+                } else {
+                    let errorMsg = `Error de API: ${response.statusText}`;
+                    if (result && result.detail) errorMsg += ` - ${result.detail}`;
+                    else if (result && Object.keys(result).length > 0) errorMsg += ` - ${JSON.stringify(result)}`;
+                    scanResultDiv.innerHTML = `<p class="scan-error">${errorMsg}</p>`;
+                }
+            } catch (error) {
+                console.error("Error en llamada API:", error);
+                scanResultDiv.innerHTML = `<p class="scan-error">Error de conexión o al procesar la respuesta del API.</p>`;
+            } finally {
+                 startScanBtn.style.display = 'inline-block';
+                 stopScanBtn.style.display = 'none';
+                 isScanning = false;
+                 lastQrCodeData = null;
+            }
+        }
+
+        function startInternalScanLogic() {
+            if (!stream) {
+                 navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+                    .then(function(s) {
+                        stream = s;
+                        video.srcObject = stream;
+                        video.setAttribute("playsinline", true);
+                        video.play();
+                        isScanning = true;
+                        animationFrameId = requestAnimationFrame(tick);
+                        startScanBtn.style.display = 'none';
+                        stopScanBtn.style.display = 'inline-block';
+                        scanResultDiv.innerHTML = '<p class="scan-info">Escáner iniciado. Buscando código QR...</p>';
+                    })
+                    .catch(function(err) {
+                        console.error("Error al acceder a la cámara: ", err);
+                        scanResultDiv.innerHTML = `<p class="scan-error">Error al acceder a la cámara: ${err.name} - ${err.message}</p>`;
+                        isScanning = false;
+                        startScanBtn.style.display = 'inline-block';
+                        stopScanBtn.style.display = 'none';
+                    });
+            } else {
+                 video.play(); // Reanudar si ya existe el stream pero estaba pausado
+                 isScanning = true;
+                 animationFrameId = requestAnimationFrame(tick);
+                 startScanBtn.style.display = 'none';
+                 stopScanBtn.style.display = 'inline-block';
+                 scanResultDiv.innerHTML = '<p class="scan-info">Escáner reanudado. Buscando código QR...</p>';
+            }
+        }
+
+        startScanBtn.addEventListener('click', () => {
+            startInternalScanLogic();
+        });
+
+        stopScanBtn.addEventListener('click', () => {
+            isScanning = false;
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+                stream = null;
+            }
+            startScanBtn.style.display = 'inline-block';
+            stopScanBtn.style.display = 'none';
+            scanResultDiv.innerHTML = '<p>Escáner detenido.</p>';
+            lastQrCodeData = null;
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+        });
+
+    </script>
+    {% endif %} {# Cierre del if user.is_authenticated para el bloque de script principal #}
+</body>
+</html>

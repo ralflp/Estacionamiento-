@@ -1,9 +1,9 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from .models import AccessLog, Person, Vehicle, AccessPermission, ControlDevice
+from .models import AccessLog, Person, Vehicle, AccessPermission, ControlDevice, AccessPoint # AccessPoint explicit
 from .forms import PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm
 from django.contrib.auth.decorators import login_required
 import logging
-from django.db.models import Q # Nueva importación para consultas complejas
+from django.db.models import Q
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,7 @@ from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.authtoken.models import Token # Nueva importación para Token
 
 from .serializers import (
     AccessRequestSerializer, AccessResponseSerializer,
@@ -22,7 +23,7 @@ from .utils import verify_access_with_models
 from django.utils import timezone
 
 
-# Django Template Views (existentes)
+# Django Template Views
 def access_log_list_view(request):
     logs = AccessLog.objects.all().order_by('-timestamp')
     context = {'access_logs': logs, 'page_title': 'Registros de Acceso'}
@@ -131,7 +132,7 @@ def user_dashboard_view(request):
     try:
         person_profile = Person.objects.get(user=user)
         if person_profile:
-            now_date = timezone.now().date() # Use date for DateField comparison
+            now_date = timezone.now().date()
             user_permissions = AccessPermission.objects.filter(
                 person=person_profile,
                 is_active=True
@@ -145,16 +146,36 @@ def user_dashboard_view(request):
         pass
     except Exception as e:
         logger.error(f"Error buscando Person profile o datos relacionados para user {user.username}: {e}")
-        pass # person_profile, user_permissions, user_vehicles permanecerán None o vacíos
+        pass
 
     context = {
         'current_user': user,
         'person_profile': person_profile,
-        'user_permissions': user_permissions, # Nuevo
-        'user_vehicles': user_vehicles,     # Nuevo
+        'user_permissions': user_permissions,
+        'user_vehicles': user_vehicles,
         'page_title': 'Mi Portal de Usuario'
     }
     return render(request, 'log_viewer_app/user_dashboard.html', context)
+
+@login_required
+def qr_scanner_page_view(request):
+    user = request.user
+    access_points = AccessPoint.objects.all().order_by('name')
+    token_string = ""
+    try:
+        token_obj, created = Token.objects.get_or_create(user=user)
+        if created:
+            logger.info(f"Nuevo token de API creado para el usuario {user.username} para la página del escáner QR.")
+        token_string = token_obj.key
+    except Exception as e:
+        logger.error(f"Error al obtener o crear token para {user.username} en qr_scanner_page_view: {e}")
+
+    context = {
+        'access_points': access_points,
+        'user_auth_token': token_string,
+        'page_title': 'Escáner de Códigos QR'
+    }
+    return render(request, 'log_viewer_app/qr_scanner_page.html', context)
 
 
 # --- API Views ---
@@ -198,9 +219,6 @@ class UserPermissionsListAPIView(ListAPIView):
         user = self.request.user
         try:
             person_profile = Person.objects.get(user=user)
-            # Para la API, podríamos querer mostrar todos los permisos, no solo los activos/futuros.
-            # O podríamos filtrarlos de manera similar al dashboard si esa es la intención.
-            # Por ahora, mostramos todos los asociados a la persona.
             return AccessPermission.objects.filter(person=person_profile).select_related('person', 'access_point').order_by('-valid_until', 'access_point__name')
         except Person.DoesNotExist:
             return AccessPermission.objects.none()
