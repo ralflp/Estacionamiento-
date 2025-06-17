@@ -38,36 +38,121 @@ def access_log_list_view(request):
     context = {'access_logs': logs, 'page_title': 'Registros de Acceso'}
     return render(request, 'log_viewer_app/access_log_list.html', context)
 
+@login_required
 def person_list_view(request):
-    persons = Person.objects.all().order_by('full_name')
-    context = {'persons': persons, 'page_title': 'Lista de Personas'}
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para ver esta lista.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en person_list_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
+    persons = Person.objects.filter(tenant=active_tenant).order_by('full_name')
+    context = {
+        'persons': persons,
+        'active_tenant': active_tenant,
+        'page_title': f'Lista de Personas ({active_tenant.name})'
+    }
     return render(request, 'log_viewer_app/person_list.html', context)
 
+@login_required
 def person_create_view(request):
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para realizar esta acción.")
+            return redirect('log_viewer_app:user_dashboard') # Or an appropriate error page
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en person_create_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
     if request.method == 'POST':
         form = PersonForm(request.POST)
         if form.is_valid():
-            form.save()
+            person = form.save(commit=False)
+            person.tenant = active_tenant # Assign the active tenant
+            person.save()
+            messages.success(request, f"Persona {person.full_name} creada exitosamente en la empresa {active_tenant.name}.")
             return redirect('log_viewer_app:person_list')
     else:
         form = PersonForm()
-    context = {'form': form, 'page_title': 'Añadir Nueva Persona'}
+
+    context = {
+        'form': form,
+        'active_tenant': active_tenant,
+        'page_title': f'Añadir Nueva Persona ({active_tenant.name})'
+    }
     return render(request, 'log_viewer_app/person_form.html', context)
 
+@login_required
 def vehicle_list_view(request):
-    vehicles = Vehicle.objects.all().select_related('owner').order_by('license_plate')
-    context = {'vehicles': vehicles, 'page_title': 'Lista de Vehículos'}
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para ver esta lista.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en vehicle_list_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
+    vehicles = Vehicle.objects.filter(tenant=active_tenant).select_related('owner', 'tenant').order_by('license_plate')
+    context = {
+        'vehicles': vehicles,
+        'active_tenant': active_tenant,
+        'page_title': f'Lista de Vehículos ({active_tenant.name})'
+    }
     return render(request, 'log_viewer_app/vehicle_list.html', context)
 
+@login_required
 def vehicle_create_view(request):
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para realizar esta acción.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en vehicle_create_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
     if request.method == 'POST':
         form = VehicleForm(request.POST)
         if form.is_valid():
-            form.save()
+            vehicle = form.save(commit=False)
+            vehicle.tenant = active_tenant # Assign the active tenant
+            vehicle.save()
+            messages.success(request, f"Vehículo {vehicle.license_plate} creado exitosamente en la empresa {active_tenant.name}.")
             return redirect('log_viewer_app:vehicle_list')
     else:
         form = VehicleForm()
-    context = {'form': form, 'page_title': 'Añadir Nuevo Vehículo'}
+        # It might be useful to filter the 'owner' field queryset in the form
+        # to only show Persons from the active_tenant.
+        # Example: form.fields['owner'].queryset = Person.objects.filter(tenant=active_tenant)
+        # However, PersonForm/VehicleForm currently don't restrict this.
+        # This would be an enhancement for later if Person/Vehicle forms are made tenant-aware in their choices.
+
+    context = {
+        'form': form,
+        'active_tenant': active_tenant,
+        'page_title': f'Añadir Nuevo Vehículo ({active_tenant.name})'
+    }
     return render(request, 'log_viewer_app/vehicle_form.html', context)
 
 def permission_list_view(request):

@@ -82,50 +82,99 @@ class TenantModelTest(TestCase):
 class PersonModelTest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        # Ensure the default tenant exists for other tests in this class that might rely on it implicitly
-        get_default_tenant_pk()
-        cls.user1 = User.objects.create_user(username='pm_user1', password='password')
+        cls.tenant1 = Tenant.objects.create(name="Person Test Tenant 1", subdomain_prefix="pmt1")
+        cls.tenant2 = Tenant.objects.create(name="Person Test Tenant 2", subdomain_prefix="pmt2")
+        cls.default_tenant = Tenant.objects.get(pk=get_default_tenant_pk()) # Default tenant
+
+        cls.user_generic = User.objects.create_user(username='pm_user_generic', password='password')
 
 
     def test_person_creation(self):
-        user_host = User.objects.create_user(username='hostuser', password='password')
-        host_person = Person.objects.create(user=user_host, full_name="Host Person", identifier="HOST01")
-        person = Person.objects.create(full_name="John Doe", identifier="JD001", is_temporary_guest=True, registered_by=host_person)
+        user_host = User.objects.create_user(username='pm_hostuser', password='password')
+        # Explicitly assign tenant1 for clarity in this test
+        host_person = Person.objects.create(tenant=self.tenant1, user=user_host, full_name="Host Person", identifier="HOST_PM_T1")
+        person = Person.objects.create(tenant=self.tenant1, full_name="John Doe", identifier="JD001_PM_T1", is_temporary_guest=True, registered_by=host_person)
         self.assertIsInstance(person, Person)
-        self.assertEqual(str(person), "John Doe (JD001) (Invitado Temp.)")
+        self.assertEqual(str(person), "John Doe (JD001_PM_T1) (Invitado Temp.)")
+        self.assertEqual(person.tenant, self.tenant1)
 
     def test_person_str_not_guest(self):
-        person = Person.objects.create(full_name="Regular Person", identifier="REG01")
-        self.assertEqual(str(person), "Regular Person (REG01)")
+        # Uses default tenant implicitly due to model default
+        person = Person.objects.create(full_name="Regular Person", identifier="REG01_PM_DEF")
+        self.assertEqual(str(person), "Regular Person (REG01_PM_DEF)")
+        self.assertEqual(person.tenant, self.default_tenant)
 
     def test_person_creation_assigns_default_tenant(self):
         """Test that a Person gets the default tenant if none is specified."""
-        # Ensure "Empresa Principal (Default)" exists or is created by get_default_tenant_pk
-        default_tenant_pk_val = get_default_tenant_pk()
-        default_tenant_obj = Tenant.objects.get(pk=default_tenant_pk_val)
-
-        # Create a user for the person object
-        user_for_person = User.objects.create_user(username='dtu_user', password='password')
-
+        user_for_person = User.objects.create_user(username='dtu_user_pm', password='password')
         person_no_tenant_specified = Person.objects.create(
-            full_name="Default Tenant User",
-            identifier="DTU01",
+            full_name="Default Tenant User PM",
+            identifier="DTU01_PM",
             user=user_for_person
         )
         self.assertIsNotNone(person_no_tenant_specified.tenant)
-        self.assertEqual(person_no_tenant_specified.tenant, default_tenant_obj)
+        self.assertEqual(person_no_tenant_specified.tenant, self.default_tenant)
+
+    def test_identifier_unique_within_tenant(self):
+        """Test that 'identifier' is unique within the same tenant."""
+        Person.objects.create(tenant=self.tenant1, full_name="Person A", identifier="ID_PM_001", user=self.user_generic)
+        with self.assertRaises(IntegrityError):
+            Person.objects.create(tenant=self.tenant1, full_name="Person B", identifier="ID_PM_001") # Same identifier, same tenant
+
+    def test_identifier_can_be_same_across_tenants(self):
+        """Test that 'identifier' can be the same across different tenants."""
+        user_t2 = User.objects.create_user(username='pm_user_t2', password='password')
+        Person.objects.create(tenant=self.tenant1, full_name="Person C", identifier="ID_PM_002", user=self.user_generic)
+        try:
+            Person.objects.create(tenant=self.tenant2, full_name="Person D", identifier="ID_PM_002", user=user_t2) # Same identifier, different tenant
+        except IntegrityError:
+            self.fail("IntegrityError raised unexpectedly for same identifier across different tenants.")
 
 
 class VehicleModelTest(TestCase):
-    def setUp(self):
-        # Ensure default tenant is available for Person creation
-        get_default_tenant_pk()
-        self.owner = Person.objects.create(full_name="Jane Smith", identifier="JS002")
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant1 = Tenant.objects.create(name="Vehicle Test Tenant 1", subdomain_prefix="vmt1")
+        cls.tenant2 = Tenant.objects.create(name="Vehicle Test Tenant 2", subdomain_prefix="vmt2")
+        cls.default_tenant = Tenant.objects.get(pk=get_default_tenant_pk())
+
+        cls.owner_t1_user = User.objects.create_user(username='owner_t1_user_vm', password='password')
+        cls.owner_t1 = Person.objects.create(tenant=cls.tenant1, full_name="Owner T1 VM", identifier="OWNER_T1_VM", user=cls.owner_t1_user)
+
+        cls.owner_t2_user = User.objects.create_user(username='owner_t2_user_vm', password='password')
+        cls.owner_t2 = Person.objects.create(tenant=cls.tenant2, full_name="Owner T2 VM", identifier="OWNER_T2_VM", user=cls.owner_t2_user)
+
+        cls.owner_default_tenant_user = User.objects.create_user(username='owner_def_user_vm', password='password')
+        cls.owner_default_tenant = Person.objects.create(tenant=cls.default_tenant, full_name="Owner Default VM", identifier="OWNER_DEF_VM", user=cls.owner_default_tenant_user)
+
 
     def test_vehicle_creation(self):
-        vehicle = Vehicle.objects.create(owner=self.owner, license_plate="XYZ123", description="Red Car")
+        # Test creation with explicit tenant
+        vehicle = Vehicle.objects.create(tenant=self.tenant1, owner=self.owner_t1, license_plate="XYZ123_VM_T1", description="Red Car T1")
         self.assertIsInstance(vehicle, Vehicle)
-        self.assertEqual(str(vehicle), "XYZ123 (Jane Smith)")
+        self.assertEqual(str(vehicle), "XYZ123_VM_T1 (Owner T1 VM)")
+        self.assertEqual(vehicle.tenant, self.tenant1)
+
+    def test_vehicle_creation_assigns_default_tenant(self):
+        """Test that a Vehicle gets the default tenant if none is specified."""
+        vehicle_no_tenant = Vehicle.objects.create(owner=self.owner_default_tenant, license_plate="DEF_LP_VM", description="Default Tenant Car")
+        self.assertIsNotNone(vehicle_no_tenant.tenant)
+        self.assertEqual(vehicle_no_tenant.tenant, self.default_tenant)
+
+    def test_license_plate_unique_within_tenant(self):
+        """Test that 'license_plate' is unique within the same tenant."""
+        Vehicle.objects.create(tenant=self.tenant1, owner=self.owner_t1, license_plate="LP_VM_001")
+        with self.assertRaises(IntegrityError):
+            Vehicle.objects.create(tenant=self.tenant1, owner=self.owner_t1, license_plate="LP_VM_001")
+
+    def test_license_plate_can_be_same_across_tenants(self):
+        """Test that 'license_plate' can be the same across different tenants."""
+        Vehicle.objects.create(tenant=self.tenant1, owner=self.owner_t1, license_plate="LP_VM_002")
+        try:
+            Vehicle.objects.create(tenant=self.tenant2, owner=self.owner_t2, license_plate="LP_VM_002")
+        except IntegrityError:
+            self.fail("IntegrityError raised unexpectedly for same license_plate across different tenants.")
+
 
 class AccessPointModelTest(TestCase):
     def test_access_point_creation(self):
@@ -339,58 +388,181 @@ class AccessLogListViewTest(TestCase):
 class PersonListViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        Person.objects.create(full_name="List Person 1", identifier="LP1")
+        cls.tenant1 = Tenant.objects.create(name="PLV Tenant 1", subdomain_prefix="plvt1")
+        cls.tenant2 = Tenant.objects.create(name="PLV Tenant 2", subdomain_prefix="plvt2")
 
-    def test_person_list_view_url_accessible_by_name(self):
-        response = self.client.get(reverse('log_viewer_app:person_list'))
+        cls.user_t1 = User.objects.create_user(username='user_t1_plv', password='password')
+        cls.person_t1_user_profile = Person.objects.create(user=cls.user_t1, full_name="User T1 PLV", identifier="USER_T1_PLV_ID", tenant=cls.tenant1)
+
+        cls.person1_t1 = Person.objects.create(tenant=cls.tenant1, full_name="Person 1 T1 PLV", identifier="P1_T1_PLV")
+        cls.person2_t1 = Person.objects.create(tenant=cls.tenant1, full_name="Person 2 T1 PLV", identifier="P2_T1_PLV")
+
+        cls.user_t2 = User.objects.create_user(username='user_t2_plv', password='password')
+        cls.person_t2_user_profile = Person.objects.create(user=cls.user_t2, full_name="User T2 PLV", identifier="USER_T2_PLV_ID", tenant=cls.tenant2)
+        cls.person1_t2 = Person.objects.create(tenant=cls.tenant2, full_name="Person 1 T2 PLV", identifier="P1_T2_PLV")
+
+        cls.user_no_profile = User.objects.create_user(username='user_no_profile_plv', password='password')
+        cls.list_url = reverse('log_viewer_app:person_list')
+        cls.login_url = '/accounts/login/' # Hardcoded to avoid NoReverseMatch in setUpTestData
+
+    def test_person_list_view_login_required(self):
+        response = self.client.get(self.list_url)
+        self.assertRedirects(response, f'{self.login_url}?next={self.list_url}')
+
+    def test_person_list_displays_tenant1_specific_data(self):
+        self.client.login(username='user_t1_plv', password='password')
+        response = self.client.get(self.list_url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'log_viewer_app/person_list.html')
-        self.assertContains(response, "LP1")
+        self.assertEqual(response.context['active_tenant'], self.tenant1)
+        self.assertContains(response, self.person1_t1.full_name)
+        self.assertContains(response, self.person2_t1.full_name)
+        self.assertContains(response, self.person_t1_user_profile.full_name) # User's own profile
+        self.assertNotContains(response, self.person1_t2.full_name) # Should not see Tenant 2 data
+
+    def test_person_list_displays_tenant2_specific_data(self):
+        self.client.login(username='user_t2_plv', password='password')
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['active_tenant'], self.tenant2)
+        self.assertContains(response, self.person1_t2.full_name)
+        self.assertContains(response, self.person_t2_user_profile.full_name)
+        self.assertNotContains(response, self.person1_t1.full_name) # Should not see Tenant 1 data
+
+    def test_person_list_view_user_no_profile_redirects(self):
+        self.client.login(username='user_no_profile_plv', password='password')
+        response = self.client.get(self.list_url)
+        self.assertRedirects(response, reverse('log_viewer_app:user_dashboard')) # As per view logic
 
 class PersonCreateViewTest(TestCase):
-    def test_person_create_view_get(self):
-        response = self.client.get(reverse('log_viewer_app:person_create'))
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant1 = Tenant.objects.create(name="PCV Tenant 1", subdomain_prefix="pcvt1")
+        cls.user_t1 = User.objects.create_user(username='user_t1_pcv', password='password')
+        cls.person_host_t1 = Person.objects.create(user=cls.user_t1, full_name="User T1 PCV", identifier="USER_T1_PCV_ID", tenant=cls.tenant1)
+
+        cls.user_no_profile_pcv = User.objects.create_user(username='user_no_profile_pcv', password='password')
+
+        cls.create_url = reverse('log_viewer_app:person_create')
+        cls.list_url = reverse('log_viewer_app:person_list')
+        cls.login_url = '/accounts/login/' # Hardcoded
+
+    def test_person_create_view_login_required_get(self):
+        response = self.client.get(self.create_url)
+        self.assertRedirects(response, f'{self.login_url}?next={self.create_url}')
+
+    def test_person_create_view_get_shows_form_for_authorized_user(self):
+        self.client.login(username='user_t1_pcv', password='password')
+        response = self.client.get(self.create_url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'log_viewer_app/person_form.html')
         self.assertIsInstance(response.context['form'], PersonForm)
+        self.assertEqual(response.context['active_tenant'], self.tenant1)
 
-    def test_person_create_view_post_valid(self):
-        initial_count = Person.objects.count()
-        response = self.client.post(reverse('log_viewer_app:person_create'), {'full_name': 'Create Person Test', 'identifier': 'CPT01'})
-        self.assertEqual(response.status_code, 302)
-        self.assertRedirects(response, reverse('log_viewer_app:person_list'))
-        self.assertEqual(Person.objects.count(), initial_count + 1)
+    def test_person_create_view_post_assigns_correct_tenant(self):
+        self.client.login(username='user_t1_pcv', password='password')
+        person_data = {'full_name': 'New Person PCV', 'identifier': 'NEW_PCV_ID'}
+        response = self.client.post(self.create_url, person_data)
+        self.assertRedirects(response, self.list_url)
+        created_person = Person.objects.get(identifier='NEW_PCV_ID')
+        self.assertEqual(created_person.tenant, self.tenant1)
 
-    def test_person_create_view_post_invalid(self):
-        response = self.client.post(reverse('log_viewer_app:person_create'), {'full_name': 'No ID'})
-        self.assertEqual(response.status_code, 200)
-        self.assertFormError(response.context['form'], 'identifier', 'This field is required.')
+    def test_person_create_view_post_invalid_data(self):
+        self.client.login(username='user_t1_pcv', password='password')
+        person_data = {'full_name': '', 'identifier': 'INVALID_PCV_ID'} # Invalid: full_name is required
+        response = self.client.post(self.create_url, person_data)
+        self.assertEqual(response.status_code, 200) # Should re-render form
+        self.assertFormError(response.context['form'], 'full_name', 'This field is required.')
+
+    def test_person_create_view_user_no_profile_redirects(self):
+        self.client.login(username='user_no_profile_pcv', password='password')
+        response = self.client.get(self.create_url)
+        self.assertRedirects(response, reverse('log_viewer_app:user_dashboard'))
+
+        response_post = self.client.post(self.create_url, {'full_name': 'Fail Person', 'identifier': 'FAIL_ID'})
+        self.assertRedirects(response_post, reverse('log_viewer_app:user_dashboard'))
+
 
 class VehicleListViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        owner = Person.objects.create(full_name="Owner For Vehicle", identifier="OFV01")
-        Vehicle.objects.create(owner=owner, license_plate="VL1", description="Vehicle List Test")
+        cls.tenant1 = Tenant.objects.create(name="VLV Tenant 1", subdomain_prefix="vlvt1")
+        cls.tenant2 = Tenant.objects.create(name="VLV Tenant 2", subdomain_prefix="vlvt2")
 
-    def test_vehicle_list_view_accessible(self):
-        response = self.client.get(reverse('log_viewer_app:vehicle_list'))
+        cls.user_t1_vlv = User.objects.create_user(username='user_t1_vlv', password='password')
+        cls.owner_t1_vlv = Person.objects.create(user=cls.user_t1_vlv, full_name="Owner T1 VLV", identifier="OWNER_T1_VLV_ID", tenant=cls.tenant1)
+        Vehicle.objects.create(tenant=cls.tenant1, owner=cls.owner_t1_vlv, license_plate="CAR1_T1_VLV")
+        Vehicle.objects.create(tenant=cls.tenant1, owner=cls.owner_t1_vlv, license_plate="CAR2_T1_VLV")
+
+        cls.user_t2_vlv = User.objects.create_user(username='user_t2_vlv', password='password')
+        cls.owner_t2_vlv = Person.objects.create(user=cls.user_t2_vlv, full_name="Owner T2 VLV", identifier="OWNER_T2_VLV_ID", tenant=cls.tenant2)
+        Vehicle.objects.create(tenant=cls.tenant2, owner=cls.owner_t2_vlv, license_plate="CAR1_T2_VLV")
+
+        cls.list_url = reverse('log_viewer_app:vehicle_list')
+        cls.login_url = '/accounts/login/' # Hardcoded
+
+    def test_vehicle_list_login_required(self):
+        response = self.client.get(self.list_url)
+        self.assertRedirects(response, f'{self.login_url}?next={self.list_url}')
+
+    def test_vehicle_list_displays_tenant1_specific_data(self):
+        self.client.login(username='user_t1_vlv', password='password')
+        response = self.client.get(self.list_url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'log_viewer_app/vehicle_list.html')
-        self.assertContains(response, "VL1")
+        self.assertEqual(response.context['active_tenant'], self.tenant1)
+        self.assertContains(response, "CAR1_T1_VLV")
+        self.assertContains(response, "CAR2_T1_VLV")
+        self.assertNotContains(response, "CAR1_T2_VLV")
+
+    def test_vehicle_list_displays_tenant2_specific_data(self):
+        self.client.login(username='user_t2_vlv', password='password')
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['active_tenant'], self.tenant2)
+        self.assertContains(response, "CAR1_T2_VLV")
+        self.assertNotContains(response, "CAR1_T1_VLV")
 
 class VehicleCreateViewTest(TestCase):
-    def setUp(self):
-        self.owner = Person.objects.create(full_name="Owner For Create Vehicle", identifier="OFCV01")
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant1 = Tenant.objects.create(name="VCV Tenant 1", subdomain_prefix="vcvt1")
+        cls.user_t1_vcv = User.objects.create_user(username='user_t1_vcv', password='password')
+        cls.owner_person_t1_vcv = Person.objects.create(user=cls.user_t1_vcv, full_name="Owner T1 VCV", identifier="OWNER_T1_VCV_ID", tenant=cls.tenant1)
 
-    def test_vehicle_create_view_get(self):
-        response = self.client.get(reverse('log_viewer_app:vehicle_create'))
+        cls.create_url = reverse('log_viewer_app:vehicle_create')
+        cls.list_url = reverse('log_viewer_app:vehicle_list')
+        cls.login_url = '/accounts/login/' # Hardcoded
+
+    def test_vehicle_create_view_login_required_get(self):
+        response = self.client.get(self.create_url)
+        self.assertRedirects(response, f'{self.login_url}?next={self.create_url}')
+
+    def test_vehicle_create_view_get_shows_form_for_authorized_user(self):
+        self.client.login(username='user_t1_vcv', password='password')
+        response = self.client.get(self.create_url)
         self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/vehicle_form.html')
         self.assertIsInstance(response.context['form'], VehicleForm)
+        self.assertEqual(response.context['active_tenant'], self.tenant1)
+        # Check if owner dropdown is filtered (advanced, requires form modification not in this subtask)
+        # For now, we just check the view loads and context is right.
 
-    def test_vehicle_create_view_post_valid(self):
-        response = self.client.post(reverse('log_viewer_app:vehicle_create'), {'owner': self.owner.pk, 'license_plate': 'VCV01', 'description': 'Created Vehicle'})
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(Vehicle.objects.filter(license_plate='VCV01').exists())
+    def test_vehicle_create_view_post_assigns_correct_tenant(self):
+        self.client.login(username='user_t1_vcv', password='password')
+        vehicle_data = {'owner': self.owner_person_t1_vcv.pk, 'license_plate': 'NEWCAR_VCV', 'description': 'Test Car VCV'}
+        response = self.client.post(self.create_url, vehicle_data)
+        self.assertRedirects(response, self.list_url)
+        created_vehicle = Vehicle.objects.get(license_plate='NEWCAR_VCV')
+        self.assertEqual(created_vehicle.tenant, self.tenant1)
+        self.assertEqual(created_vehicle.owner, self.owner_person_t1_vcv)
+
+    def test_vehicle_create_view_post_invalid_data(self):
+        self.client.login(username='user_t1_vcv', password='password')
+        vehicle_data = {'owner': self.owner_person_t1_vcv.pk, 'license_plate': ''} # Invalid: license_plate required
+        response = self.client.post(self.create_url, vehicle_data)
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context['form'], 'license_plate', 'This field is required.')
 
 class AccessPermissionListViewTest(TestCase):
     @classmethod

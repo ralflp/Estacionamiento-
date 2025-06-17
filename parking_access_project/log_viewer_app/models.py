@@ -74,7 +74,7 @@ class AccessLog(models.Model):
 class Person(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='persons', default=get_default_tenant_pk)
     full_name = models.CharField(max_length=200, help_text="Nombre completo de la persona")
-    identifier = models.CharField(max_length=100, unique=True, help_text="Identificador único (e.g., DNI, ID de empleado)")
+    identifier = models.CharField(max_length=100, help_text="Identificador único (e.g., DNI, ID de empleado)") # Removed unique=True
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -98,6 +98,11 @@ class Person(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        unique_together = (('tenant', 'identifier'),)
+        # Consider adding ordering if not already present and desired, e.g.
+        # ordering = ['tenant', 'full_name']
+
     def __str__(self):
         guest_status = " (Invitado Temp.)" if self.is_temporary_guest else ""
         return f"{self.full_name} ({self.identifier}){guest_status}"
@@ -105,10 +110,15 @@ class Person(models.Model):
 class Vehicle(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='vehicles', default=get_default_tenant_pk)
     owner = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='vehicles', help_text="Propietario del vehículo")
-    license_plate = models.CharField(max_length=20, unique=True, help_text="Placa o matrícula del vehículo")
+    license_plate = models.CharField(max_length=20, help_text="Placa o matrícula del vehículo") # Removed unique=True
     description = models.TextField(blank=True, help_text="Descripción adicional (e.g., color, modelo)")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (('tenant', 'license_plate'),)
+        # Consider adding ordering if not already present and desired, e.g.
+        # ordering = ['tenant', 'license_plate']
 
     def __str__(self):
         return f"{self.license_plate} ({self.owner.full_name})"
