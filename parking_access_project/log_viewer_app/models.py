@@ -2,7 +2,66 @@ from django.db import models
 from django.utils import timezone
 from django.conf import settings
 
+# --- Default Tenant Logic ---
+DEFAULT_TENANT_NAME = "Empresa Principal (Default)"
+DEFAULT_TENANT_SUBDOMAIN = "default"
+
+def get_default_tenant_pk():
+    # Import Tenant model locally to avoid circular imports at startup if models are loaded out of order
+    # or if this function is called by makemigrations before all apps are fully ready.
+    from log_viewer_app.models import Tenant # Changed from .models for potentially wider applicability outside model file
+
+    try:
+        tenant = Tenant.objects.get(name=DEFAULT_TENANT_NAME)
+        return tenant.pk
+    except Tenant.DoesNotExist:
+        try:
+             tenant, created = Tenant.objects.get_or_create(
+                name=DEFAULT_TENANT_NAME,
+                defaults={'subdomain_prefix': DEFAULT_TENANT_SUBDOMAIN}
+            )
+             if created:
+                 print(f"Warning: Default tenant '{DEFAULT_TENANT_NAME}' created by get_default_tenant_pk. This should ideally be handled by data migration 0016.")
+             return tenant.pk
+        except Exception as e:
+            # This is a critical issue if it happens during a real 'migrate' operation
+            # For 'makemigrations', Django might handle it or use a sentinel value if the app registry is not ready.
+            # If this function is used as a default for a non-nullable field, returning None or raising error here will fail migrations.
+            # A common practice for 'makemigrations' to succeed when it needs a default for a non-nullable FK
+            # without querying the DB is to provide a temporary, simple default like an integer (e.g., 1)
+            # and ensure that the data migration creates the default Tenant with that PK.
+            # However, the previous migration should have made this robust.
+            print(f"CRITICAL ERROR in get_default_tenant_pk: Default tenant '{DEFAULT_TENANT_NAME}' could not be fetched or created: {e}. This will likely cause issues.")
+            # Raising an error might be better than returning a potentially incorrect PK like 1 if not coordinated.
+            # For now, per instructions, we assume this setup should work due to prior data migration.
+            # If makemigrations fails, this function might need to be simplified to return a literal for that phase.
+            raise e # Re-raise the exception to make the problem visible
+
+
+class Tenant(models.Model):
+    name = models.CharField(
+        max_length=150,
+        unique=True,
+        help_text="Nombre de la empresa o inquilino"
+    )
+    subdomain_prefix = models.CharField(
+        max_length=50,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Prefijo de subdominio o identificador en URL (opcional, solo caracteres válidos para URL/DNS)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
 class AccessLog(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='access_logs', default=get_default_tenant_pk)
     timestamp = models.DateTimeField(auto_now_add=True)
     qr_data = models.CharField(max_length=255)
     access_granted = models.BooleanField()
@@ -13,6 +72,7 @@ class AccessLog(models.Model):
         return f"[{self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}] QR: {self.qr_data}, Acceso: {'Permitido' if self.access_granted else 'Denegado'}"
 
 class Person(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='persons', default=get_default_tenant_pk)
     full_name = models.CharField(max_length=200, help_text="Nombre completo de la persona")
     identifier = models.CharField(max_length=100, unique=True, help_text="Identificador único (e.g., DNI, ID de empleado)")
     user = models.OneToOneField(
@@ -43,6 +103,7 @@ class Person(models.Model):
         return f"{self.full_name} ({self.identifier}){guest_status}"
 
 class Vehicle(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='vehicles', default=get_default_tenant_pk)
     owner = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='vehicles', help_text="Propietario del vehículo")
     license_plate = models.CharField(max_length=20, unique=True, help_text="Placa o matrícula del vehículo")
     description = models.TextField(blank=True, help_text="Descripción adicional (e.g., color, modelo)")
@@ -53,6 +114,7 @@ class Vehicle(models.Model):
         return f"{self.license_plate} ({self.owner.full_name})"
 
 class AccessPoint(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='access_points', default=get_default_tenant_pk)
     name = models.CharField(max_length=100, unique=True, help_text="Nombre o ID único del punto de acceso (e.g., 'Puerta Principal Garaje', 'Torno Entrada Este')")
     description = models.TextField(blank=True, help_text="Descripción adicional del punto de acceso")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -61,6 +123,7 @@ class AccessPoint(models.Model):
         return self.name
 
 class AccessPermission(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='access_permissions', default=get_default_tenant_pk)
     person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='permissions', help_text="Persona a la que se concede el permiso")
     access_point = models.ForeignKey(AccessPoint, on_delete=models.CASCADE, related_name='permissions', help_text="Punto de acceso para el cual se concede el permiso")
     is_active = models.BooleanField(default=True, help_text="¿Está este permiso actualmente activo?")
@@ -80,6 +143,7 @@ class AccessPermission(models.Model):
         return f"Permiso para {self.person.full_name} en {self.access_point.name} ({status},{validity})"
 
 class ControlDevice(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='control_devices', default=get_default_tenant_pk)
     name = models.CharField(max_length=150, help_text="Nombre descriptivo para el dispositivo")
     device_id = models.CharField(max_length=100, unique=True, help_text="Identificador único del dispositivo")
     access_point = models.ForeignKey(AccessPoint, on_delete=models.SET_NULL, null=True, blank=True, related_name='control_devices', help_text="Punto de acceso que este dispositivo controla")
@@ -94,6 +158,7 @@ class ControlDevice(models.Model):
         return f"{self.name} ({self.device_id}) - AP: {ap_name}"
 
 class Service(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='services', default=get_default_tenant_pk)
     name = models.CharField(max_length=150, unique=True, help_text="Nombre del servicio o producto (e.g., 'Estacionamiento Mensual', 'Tarjeta de Acceso')")
     description = models.TextField(blank=True, null=True, help_text="Descripción detallada del servicio")
     price = models.DecimalField(max_digits=10, decimal_places=2, help_text="Precio base del servicio")
@@ -103,6 +168,7 @@ class Service(models.Model):
         return f"{self.name} - ${self.price:.2f}"
 
 class UserSubscription(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='user_subscriptions', default=get_default_tenant_pk)
     BILLING_CYCLE_CHOICES = [('once', 'Pago Único'), ('monthly', 'Mensual'), ('quarterly', 'Trimestral'), ('annually', 'Anual'), ('other', 'Otro')]
     person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='subscriptions', help_text="Persona asociada a esta suscripción")
     service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name='subscriptions', help_text="Servicio al que está suscrita la persona")
@@ -128,6 +194,7 @@ class UserSubscription(models.Model):
         return f"Suscripción de {self.person.full_name} a {self.service.name} ({status}) - ${price_info:.2f} ({self.get_billing_cycle_display()}). Fin: {end_date_str}"
 
 class Invoice(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='invoices', default=get_default_tenant_pk)
     STATUS_CHOICES = [('draft', 'Borrador'), ('pending', 'Pendiente'), ('paid', 'Pagada'), ('overdue', 'Vencida'), ('cancelled', 'Cancelada'), ('partial', 'Parcialmente Pagada')]
     person = models.ForeignKey(Person, on_delete=models.PROTECT, related_name='invoices', help_text="Persona a la que se emite la factura")
     user_subscription = models.ForeignKey(UserSubscription, on_delete=models.SET_NULL, null=True, blank=True, related_name='invoices', help_text="Suscripción asociada a esta factura (opcional)")
@@ -146,6 +213,7 @@ class Invoice(models.Model):
         return f"Factura {self.invoice_number} para {self.person.full_name} - ${self.amount_due:.2f} (Estado: {self.get_status_display()})"
 
 class Payment(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='payments', default=get_default_tenant_pk)
     person = models.ForeignKey(Person, on_delete=models.SET_NULL, null=True, blank=False, related_name='payments', help_text="Persona que realizó el pago")
     invoice = models.ForeignKey(Invoice, on_delete=models.SET_NULL, null=True, blank=True, related_name='payments_made', help_text="Factura a la que se aplica este pago (opcional)")
     amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Monto del pago")

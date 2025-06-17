@@ -6,7 +6,7 @@ from .models import (
 )
 from .forms import (
     PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm,
-    GuestRegistrationForm
+    GuestRegistrationForm, PersonProfileEditForm # Added PersonProfileEditForm
 )
 from .utils import verify_access_with_models, publish_mqtt_message, process_payment_for_access
 from .billing_utils import generate_invoice_for_subscription, generate_all_due_invoices, get_due_cycle_start_date_for_subscription # Import the new function
@@ -35,7 +35,58 @@ from django.core.management import call_command
 
 
 # --- Model Tests ---
+from django.db import IntegrityError # Required for uniqueness tests
+from .models import Tenant, get_default_tenant_pk # Import Tenant and helper
+
+class TenantModelTest(TestCase):
+    def test_tenant_creation(self):
+        """Test basic creation of a Tenant instance."""
+        tenant = Tenant.objects.create(name="Test Corp", subdomain_prefix="testcorp")
+        self.assertIsNotNone(tenant.pk)
+        self.assertEqual(tenant.name, "Test Corp")
+        self.assertEqual(tenant.subdomain_prefix, "testcorp")
+        self.assertIsNotNone(tenant.created_at)
+        self.assertIsNotNone(tenant.updated_at)
+        self.assertEqual(str(tenant), "Test Corp")
+
+    def test_tenant_name_unique(self):
+        """Test that Tenant names are unique."""
+        Tenant.objects.create(name="Unique Corp", subdomain_prefix="unique1")
+        with self.assertRaises(IntegrityError):
+            Tenant.objects.create(name="Unique Corp", subdomain_prefix="unique2")
+
+    def test_tenant_subdomain_prefix_unique_for_non_null_values(self):
+        """Test that non-null subdomain_prefix values are unique."""
+        Tenant.objects.create(name="Subdomain Corp Alpha", subdomain_prefix="sub_alpha")
+        with self.assertRaises(IntegrityError):
+            Tenant.objects.create(name="Subdomain Corp Beta", subdomain_prefix="sub_alpha")
+
+    def test_tenant_subdomain_prefix_allows_multiple_nulls(self):
+        """Test that multiple tenants can have a subdomain_prefix of None."""
+        # Ensure a clean slate for this specific test regarding NULL subdomains.
+        Tenant.objects.filter(subdomain_prefix=None).delete()
+
+        # Create the first tenant with subdomain_prefix=None.
+        tenant_null_1 = Tenant.objects.create(name="Null Subdomain Corp Charlie", subdomain_prefix=None)
+        self.assertIsNotNone(tenant_null_1.pk)
+        self.assertEqual(Tenant.objects.filter(subdomain_prefix=None).count(), 1)
+
+        # Create a second tenant with subdomain_prefix=None.
+        # This is allowed by Django's model validation and most database backends (including SQLite apparently).
+        tenant_null_2 = Tenant.objects.create(name="Null Subdomain Corp Delta", subdomain_prefix=None)
+        self.assertIsNotNone(tenant_null_2.pk)
+
+        # Ensure the count of tenants with subdomain_prefix=None is now 2.
+        self.assertEqual(Tenant.objects.filter(subdomain_prefix=None).count(), 2)
+
 class PersonModelTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        # Ensure the default tenant exists for other tests in this class that might rely on it implicitly
+        get_default_tenant_pk()
+        cls.user1 = User.objects.create_user(username='pm_user1', password='password')
+
+
     def test_person_creation(self):
         user_host = User.objects.create_user(username='hostuser', password='password')
         host_person = Person.objects.create(user=user_host, full_name="Host Person", identifier="HOST01")
@@ -47,9 +98,28 @@ class PersonModelTest(TestCase):
         person = Person.objects.create(full_name="Regular Person", identifier="REG01")
         self.assertEqual(str(person), "Regular Person (REG01)")
 
+    def test_person_creation_assigns_default_tenant(self):
+        """Test that a Person gets the default tenant if none is specified."""
+        # Ensure "Empresa Principal (Default)" exists or is created by get_default_tenant_pk
+        default_tenant_pk_val = get_default_tenant_pk()
+        default_tenant_obj = Tenant.objects.get(pk=default_tenant_pk_val)
+
+        # Create a user for the person object
+        user_for_person = User.objects.create_user(username='dtu_user', password='password')
+
+        person_no_tenant_specified = Person.objects.create(
+            full_name="Default Tenant User",
+            identifier="DTU01",
+            user=user_for_person
+        )
+        self.assertIsNotNone(person_no_tenant_specified.tenant)
+        self.assertEqual(person_no_tenant_specified.tenant, default_tenant_obj)
+
 
 class VehicleModelTest(TestCase):
     def setUp(self):
+        # Ensure default tenant is available for Person creation
+        get_default_tenant_pk()
         self.owner = Person.objects.create(full_name="Jane Smith", identifier="JS002")
 
     def test_vehicle_creation(self):
@@ -1472,3 +1542,98 @@ class UserSubscriptionAdminActionTest(TestCase):
         self.assertTrue(any("2 suscripciones fueron omitidas" in m for m in messages_sent))
 
 # The OldGeneratePeriodicInvoicesCommandTest class is now removed.
+
+
+# --- Tests for Person Profile Editing ---
+class PersonProfileEditFormTest(TestCase):
+    def test_form_valid_data(self):
+        form = PersonProfileEditForm(data={'full_name': 'Test User Valid Name'})
+        self.assertTrue(form.is_valid())
+
+    def test_form_save_updates_person(self):
+        user = User.objects.create_user(username='profileuser', password='password')
+        person = Person.objects.create(user=user, full_name="Original Name", identifier="PU007")
+        form = PersonProfileEditForm(instance=person, data={'full_name': 'Nuevo Nombre Completo'})
+        self.assertTrue(form.is_valid())
+        form.save()
+        person.refresh_from_db()
+        self.assertEqual(person.full_name, 'Nuevo Nombre Completo')
+
+    def test_form_fields_are_correct(self):
+        form = PersonProfileEditForm()
+        self.assertEqual(list(form.fields.keys()), ['full_name'])
+        self.assertEqual(form.Meta.fields, ['full_name'])
+
+    def test_form_empty_full_name_invalid(self):
+        form = PersonProfileEditForm(data={'full_name': ''})
+        self.assertFalse(form.is_valid())
+        self.assertIn('full_name', form.errors)
+        self.assertEqual(form.errors['full_name'][0], 'This field is required.')
+
+
+class PersonProfileEditViewTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user_with_profile = User.objects.create_user(username='userwithprofile', password='password123')
+        cls.person_profile = Person.objects.create(user=cls.user_with_profile, full_name="Initial Profile Name", identifier="PROFILE01")
+
+        cls.user_no_profile = User.objects.create_user(username='usernoprofile', password='password123')
+
+        cls.edit_profile_url = reverse('log_viewer_app:person_profile_edit')
+        cls.dashboard_url = reverse('log_viewer_app:user_dashboard')
+        # cls.login_url will be set in setUp
+
+    def setUp(self):
+        self.login_url = '/accounts/login/' # Hardcoded path as a test
+
+    def test_view_redirects_if_not_logged_in(self):
+        response = self.client.get(self.edit_profile_url)
+        self.assertRedirects(response, f'{self.login_url}?next={self.edit_profile_url}')
+
+    def test_view_redirects_if_user_has_no_person_profile(self):
+        self.client.login(username='usernoprofile', password='password123')
+        response = self.client.get(self.edit_profile_url, follow=True) # follow=True to check final destination and messages
+        self.assertRedirects(response, self.dashboard_url, status_code=302, target_status_code=200)
+
+        messages_list = list(response.context.get('messages', []))
+        self.assertTrue(any(message.level == messages.ERROR and "No se encontró un perfil de persona asociado" in message.message for message in messages_list))
+
+    def test_view_get_shows_form_with_instance_data(self):
+        self.client.login(username='userwithprofile', password='password123')
+        response = self.client.get(self.edit_profile_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/person_profile_edit_form.html')
+        self.assertIsInstance(response.context['form'], PersonProfileEditForm)
+        self.assertEqual(response.context['form'].instance, self.person_profile)
+        self.assertContains(response, self.person_profile.full_name) # Check if current name is in the form
+
+    def test_view_post_valid_data_updates_profile_and_redirects(self):
+        self.client.login(username='userwithprofile', password='password123')
+        new_name = 'Nombre Actualizado Por Test'
+        post_data = {'full_name': new_name}
+
+        response = self.client.post(self.edit_profile_url, post_data, follow=True)
+
+        self.assertRedirects(response, self.dashboard_url, status_code=302, target_status_code=200)
+
+        self.person_profile.refresh_from_db()
+        self.assertEqual(self.person_profile.full_name, new_name)
+
+        messages_list = list(response.context.get('messages', []))
+        self.assertTrue(any(message.level == messages.SUCCESS and "Tu perfil ha sido actualizado exitosamente." in message.message for message in messages_list))
+
+    def test_view_post_invalid_data_rerenders_form(self):
+        self.client.login(username='userwithprofile', password='password123')
+        original_name = self.person_profile.full_name
+        post_data = {'full_name': ''} # Invalid empty name
+
+        response = self.client.post(self.edit_profile_url, post_data)
+
+        self.assertEqual(response.status_code, 200) # Should re-render the form
+        self.assertIsInstance(response.context['form'], PersonProfileEditForm)
+        self.assertTrue(response.context['form'].errors)
+        self.assertIn('full_name', response.context['form'].errors)
+
+        self.person_profile.refresh_from_db()
+        self.assertEqual(self.person_profile.full_name, original_name) # Name should not have changed
