@@ -4,31 +4,131 @@
     <meta charset="UTF-8">
     <title>{{ page_title|default:"Mi Portal" }}</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
-        .container { max-width: 900px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        h1, h2 { color: #333; }
-        h1 { text-align: center; margin-bottom: 30px; }
-        h2 { border-bottom: 2px solid #007bff; padding-bottom: 5px; margin-top: 30px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-        th { background-color: #007bff; color: white; }
-        .empty-state { color: #777; font-style: italic; margin-top: 15px; }
-        .welcome-message { margin-bottom: 20px; font-size: 1.1em; }
-        nav { margin-bottom: 20px; text-align: center; }
-        nav a { margin: 0 10px; color: #007bff; text-decoration: none; font-weight: bold; }
-        nav a:hover { text-decoration: underline; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f9fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 960px;
+            margin: 20px auto;
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.075);
+        }
+        h1, h2, h3 {
+            color: #333;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        h2 {
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 8px;
+            margin-top: 40px;
+            font-size: 1.75em;
+        }
+        p {
+            margin-bottom: 1em;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            margin-bottom: 20px;
+        }
+        th, td {
+            border: 1px solid #dee2e6;
+            padding: 10px 12px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background-color: #e9ecef;
+            color: #495057;
+            font-weight: bold;
+        }
+        .empty-state {
+            color: #6c757d;
+            font-style: italic;
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-left: 3px solid #0056b3;
+        }
+        .welcome-message {
+            margin-bottom: 25px;
+            font-size: 1.15em;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        }
+        nav {
+            margin-bottom: 30px;
+            text-align: center;
+            padding: 10px 0;
+            border-top: 1px solid #dee2e6; /* Added top border for separation */
+            border-bottom: 1px solid #dee2e6;
+        }
+        nav a.button-style-nav { /* Styling for nav links to look like flat buttons/tabs */
+            margin: 0 5px;
+            padding: 8px 12px;
+            color: #0056b3;
+            text-decoration: none;
+            font-weight: bold;
+            border-radius: 4px;
+            transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+        }
+        nav a.button-style-nav:hover, nav a.button-style-nav:focus {
+            background-color: #0056b3;
+            color: white;
+            text-decoration: none;
+        }
+        nav a.button-style-nav.logout { /* Specific style for logout if needed */
+            /* background-color: #dc3545; */ /* Example: red background for logout */
+            /* border-color: #dc3545; */
+        }
+        nav a.button-style-nav.logout:hover, nav a.button-style-nav.logout:focus {
+            /* background-color: #c82333; */
+            /* color: white; */
+        }
 
-        /* Estilos para estados de suscripción */
-        .status-activo { color: green; font-weight: bold; }
-        .status-inactivo { color: red; font-weight: bold; }
+        .logout-link-container {
+            margin-top: 40px;
+            text-align: center;
+        }
+        .logout-link-container a { /* This style is for the main logout button at the bottom if kept separate */
+            color: #0056b3;
+            text-decoration: none;
+            font-weight: bold;
+            padding: 10px 20px;
+            border: 1px solid #0056b3;
+            border-radius: 4px;
+            transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+        }
+        .logout-link-container a:hover, .logout-link-container a:focus {
+            background-color: #0056b3;
+            color: white;
+            text-decoration: none;
+        }
 
-        /* Estilos para estados de factura */
-        .status-pending { color: orange; font-weight: bold; }
-        .status-paid { color: green; font-weight: bold; }
-        .status-overdue { color: red; font-weight: bold; }
-        .status-cancelled { color: grey; text-decoration: line-through; }
-        .status-draft { color: #555; font-style: italic; }
-        .status-partial { color: #007bff; font-weight: bold; } /* Para 'parcialmente pagada' */
+        .status-activo { color: #28a745; font-weight: bold; }
+        .status-inactivo { color: #dc3545; font-weight: bold; }
+
+        .status-pending { color: #fd7e14; font-weight: bold; }
+        .status-paid { color: #28a745; font-weight: bold; }
+        .status-overdue { color: #dc3545; font-weight: bold; }
+        .status-cancelled { color: #6c757d; text-decoration: line-through; }
+        .status-draft { color: #495057; font-style: italic; }
+        .status-partial { color: #0056b3; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -39,11 +139,21 @@
             <p class="welcome-message">Hola, <strong>{{ current_user.username }}</strong>.</p>
 
             <nav>
-                <a href="{% url 'log_viewer_app:access_log_list' %}">Ver Registros de Acceso (Global)</a>
-                <a href="{% url 'log_viewer_app:qr_scanner_page' %}">Escáner QR</a>
-                {% if perms.log_viewer_app.add_person %} {# Asumiendo que se configuran permisos para ver esto #}
-                    <a href="{% url 'log_viewer_app:guest_registration' %}">Registrar Invitado</a>
+                {% if person_profile %}
+                    <a href="{% url 'log_viewer_app:person_profile_edit' %}" class="button-style-nav">Editar Mi Perfil</a>
                 {% endif %}
+                <a href="{% url 'log_viewer_app:qr_scanner_page' %}" class="button-style-nav">Escáner QR</a>
+                {% comment %}
+                The guest registration link might be better placed in a section for "Admin" or "Management Actions"
+                if the user has specific group permissions, rather than directly in the main user nav,
+                unless it's a very common action for this user type.
+                For now, following the prompt's structure.
+                {% endcomment %}
+                {% if perms.log_viewer_app.add_person or request.user.is_staff %} {# Simplified condition example #}
+                    <a href="{% url 'log_viewer_app:guest_registration' %}" class="button-style-nav">Registrar Invitado</a>
+                {% endif %}
+                <a href="{% url 'log_viewer_app:access_log_list' %}" class="button-style-nav">Ver Todos los Registros</a>
+                <a href="{% url 'logout' %}" class.button-style-nav logout">Cerrar Sesión</a>
             </nav>
 
             {% if person_profile %}
@@ -171,7 +281,7 @@
             {% else %}
                 <p class="empty-state">Tu usuario no está asociado a un perfil de persona en el sistema de acceso. Por favor, contacta al administrador.</p>
             {% endif %}
-            <div style="margin-top: 30px; text-align: center;">
+            <div class="logout-link-container">
                  <a href="{% url 'logout' %}">Cerrar Sesión</a>
             </div>
         {% else %}

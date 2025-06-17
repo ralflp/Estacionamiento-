@@ -5,28 +5,131 @@
     <title>{{ page_title|default:"Escáner QR" }}</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; display: flex; flex-direction: column; align-items: center; }
-        #scanner-container { border: 1px solid #ccc; padding: 20px; border-radius: 8px; background-color: #f9f9f9; text-align: center; }
-        #video-container { position: relative; width: 320px; height: 240px; margin: auto; border: 1px solid #ddd; margin-bottom:15px; background-color: #333; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f9fa;
+            color: #333;
+            line-height: 1.6;
+            display: flex; /* Keeps scanner centered */
+            flex-direction: column;
+            align-items: center;
+        }
+        /* Applied .container styles to #scanner-container */
+        #scanner-container {
+            max-width: 700px; /* More form-like */
+            width: 100%; /* Ensure it takes up available width up to max-width */
+            margin: 20px auto;
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.075);
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        a {
+            color: #0056b3;
+            text-decoration: none;
+        }
+        a:hover, a:focus {
+            text-decoration: underline;
+            color: #003d80;
+        }
+
+        /* Scanner specific styles - preserved and adjusted */
+        #video-container {
+            position: relative;
+            width: 320px; /* Keep original scanner dimensions */
+            height: 240px;
+            margin: 20px auto; /* Centered with margin */
+            border: 1px solid #dee2e6; /* Updated border color */
+            margin-bottom:15px;
+            background-color: #333;
+        }
         #qr-video { width: 100%; height: 100%; object-fit: cover; }
-        #qr-canvas { display: none; }
-        .controls { margin-bottom: 15px; }
-        label { margin-right: 10px; }
-        select, button { padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
-        #scan-result { margin-top: 15px; padding: 10px; border: 1px dashed #ccc; min-height: 50px; background-color: #fff; text-align: left;}
-        .scan-success { color: green; font-weight: bold; }
-        .scan-error { color: red; font-weight: bold; }
-        .scan-info { color: blue; }
-        #detection-box { /* Opcional, si se usa para dibujar el cuadro */
-            position: absolute;
-            border: 2px solid red;
-            box-sizing: border-box;
-            pointer-events: none;
+        #qr-canvas { display: none; } /* Keep as is */
+
+        .controls { margin-bottom: 20px; }
+        .controls label {
+            margin-right: 8px;
+            font-weight: bold;
+            color: #495057;
+        }
+        .controls select, .controls button {
+            padding: 10px; /* Consistent padding */
+            border-radius: 4px;
+            border: 1px solid #ced4da; /* Consistent border */
+            font-size: 0.95em;
+            margin-left: 5px;
+        }
+        .controls select {
+            width: auto; /* Allow select to size based on content + padding */
+            min-width: 200px; /* Ensure it's not too small */
+            appearance: none;
+            background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23007bff%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E');
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 10px;
+            padding-right: 30px;
+        }
+        .controls button {
+            background-color: #0056b3;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .controls button:hover {
+            background-color: #003d80;
+        }
+        #stop-scan-btn { /* Specific style for stop button if needed */
+            background-color: #dc3545; /* Red for stop/danger actions */
+        }
+        #stop-scan-btn:hover {
+            background-color: #c82333;
+        }
+
+        #scan-result {
+            margin-top: 20px;
+            padding: 12px;
+            border: 1px dashed #ced4da; /* Updated border */
+            min-height: 50px;
+            background-color: #f8f9fa; /* Light background for result area */
+            text-align: left;
+            border-radius: 4px;
+        }
+        .scan-success { color: #28a745; font-weight: bold; } /* Green */
+        .scan-error { color: #dc3545; font-weight: bold; } /* Red */
+        .scan-info { color: #0056b3; } /* Primary link blue */
+
+        .user-nav { /* For consistency if dashboard links are added */
+            width: 100%;
+            margin-bottom: 20px;
+            padding-bottom:15px;
+            border-bottom: 1px solid #dee2e6;
+            text-align: right;
+            font-size: 0.9em;
+        }
+        .user-nav a {
+            font-weight: bold;
+            margin-left: 15px;
         }
     </style>
 </head>
 <body>
     <div id="scanner-container">
+        {% if user.is_authenticated %}
+            <div class="user-nav">
+                <a href="{% url 'log_viewer_app:user_dashboard' %}">Mi Portal</a>
+                <a href="{% url 'logout' %}">Cerrar Sesión</a>
+            </div>
+        {% endif %}
+
         <h1>{{ page_title|default:"Escáner de Códigos QR" }}</h1>
 
         {% if user.is_authenticated %}
@@ -41,13 +144,12 @@
                         <option value="">No hay puntos de acceso configurados</option>
                     {% endif %}
                 </select>
-                <button id="start-scan-btn" style="margin-left: 10px;">Iniciar Escáner</button>
+                <button id="start-scan-btn">Iniciar Escáner</button>
                 <button id="stop-scan-btn" style="display: none;">Detener Escáner</button>
             </div>
 
             <div id="video-container">
                 <video id="qr-video" playsinline autoplay muted></video>
-                {# <div id="detection-box"></div> #}
             </div>
             <canvas id="qr-canvas"></canvas>
 
@@ -59,7 +161,7 @@
             <script type="text/javascript">
                 const USER_API_TOKEN = "{{ user_auth_token|escapejs }}";
                 const VERIFY_ACCESS_API_URL = "{% url 'log_viewer_app:api_verify_access' %}";
-                const CSRF_TOKEN = "{{ csrf_token }}"; // Para el header X-CSRFToken
+                const CSRF_TOKEN = "{{ csrf_token }}";
             </script>
         {% else %}
             <p>Debes <a href="{% url 'login' %}?next={{ request.path|urlencode }}">iniciar sesión</a> para usar el escáner.</p>
@@ -75,7 +177,6 @@
         const startScanBtn = document.getElementById('start-scan-btn');
         const stopScanBtn = document.getElementById('stop-scan-btn');
         const accessPointSelect = document.getElementById('access-point-select');
-        // const detectionBox = document.getElementById('detection-box');
 
         let stream = null;
         let animationFrameId = null;
@@ -83,15 +184,6 @@
         let lastQrCodeData = null;
         let lastQrCodeTime = 0;
         const COOLDOWN_PERIOD = 3000;
-
-        function drawLine(begin, end, color) {
-            canvas.beginPath();
-            canvas.moveTo(begin.x, begin.y);
-            canvas.lineTo(end.x, end.y);
-            canvas.lineWidth = 4;
-            canvas.strokeStyle = color;
-            canvas.stroke();
-        }
 
         function tick() {
             if (!isScanning || !stream || video.readyState !== video.HAVE_ENOUGH_DATA) {
@@ -108,12 +200,7 @@
                 inversionAttempts: "dontInvert",
             });
 
-            if (code && code.data) { // Asegurarse que code.data exista
-                // drawLine(code.location.topLeftCorner, code.location.topRightCorner, "#FF3B58");
-                // drawLine(code.location.topRightCorner, code.location.bottomRightCorner, "#FF3B58");
-                // drawLine(code.location.bottomRightCorner, code.location.bottomLeftCorner, "#FF3B58");
-                // drawLine(code.location.bottomLeftCorner, code.location.topLeftCorner, "#FF3B58");
-
+            if (code && code.data) {
                 const currentTime = Date.now();
                 if (code.data !== lastQrCodeData || (currentTime - lastQrCodeTime > COOLDOWN_PERIOD)) {
                     lastQrCodeData = code.data;
@@ -134,8 +221,8 @@
             const accessPointName = accessPointSelect.value;
             if (!accessPointName) {
                 scanResultDiv.innerHTML = '<p class="scan-error">Error: Por favor, selecciona un Punto de Acceso.</p>';
-                startScanBtn.style.display = 'inline-block'; // Permitir reiniciar
-                isScanning = false; // Detener si estaba activo
+                startScanBtn.style.display = 'inline-block';
+                isScanning = false;
                 return;
             }
             if (!USER_API_TOKEN) {
@@ -206,7 +293,7 @@
                         stopScanBtn.style.display = 'none';
                     });
             } else {
-                 video.play(); // Reanudar si ya existe el stream pero estaba pausado
+                 video.play();
                  isScanning = true;
                  animationFrameId = requestAnimationFrame(tick);
                  startScanBtn.style.display = 'none';
@@ -243,6 +330,6 @@
         });
 
     </script>
-    {% endif %} {# Cierre del if user.is_authenticated para el bloque de script principal #}
+    {% endif %}
 </body>
 </html>

@@ -94,3 +94,17 @@ class GuestRegistrationForm(forms.Form):
         #     self.add_error('permission_valid_from', "La fecha de inicio del permiso no puede ser en el pasado.")
 
         return cleaned_data
+
+class PersonProfileEditForm(forms.ModelForm):
+    class Meta:
+        model = Person
+        fields = ['full_name']
+        # widgets = {
+        #     'full_name': forms.TextInput(attrs={'class': 'form-control-special'}), # Ejemplo si se necesita clase especial
+        # }
+        labels = {
+            'full_name': "Nombre Completo", # Etiqueta más amigable
+        }
+        help_texts = {
+            'full_name': "Así es como tu nombre se mostrará en el sistema.",
+        }

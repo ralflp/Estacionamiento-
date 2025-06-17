@@ -4,18 +4,75 @@
     <meta charset="UTF-8">
     <title>{{ page_title|default:"Registros de Acceso" }}</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
-        .container { max-width: 900px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        h1 { text-align: center; margin-bottom: 30px; color: #333; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-        th { background-color: #007bff; color: white; }
-        .permitido { color: green; font-weight: bold; }
-        .denegado { color: red; font-weight: bold; }
-        .empty-state { color: #777; font-style: italic; margin-top: 20px; }
-        .user-nav { margin-bottom: 15px; padding-bottom:10px; border-bottom: 1px solid #eee; text-align: right; }
-        .user-nav a { font-weight: bold; margin-left: 15px; color: #007bff; text-decoration: none; }
-        .user-nav a:hover { text-decoration: underline; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f9fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 960px; /* Suitable for lists */
+            margin: 20px auto;
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.075);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            margin-bottom: 20px;
+        }
+        th, td {
+            border: 1px solid #dee2e6;
+            padding: 10px 12px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background-color: #e9ecef;
+            color: #495057;
+            font-weight: bold;
+        }
+        a {
+            color: #0056b3;
+            text-decoration: none;
+        }
+        a:hover, a:focus {
+            text-decoration: underline;
+            color: #003d80;
+        }
+        .empty-state {
+            color: #6c757d;
+            font-style: italic;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-left: 3px solid #0056b3;
+        }
+        .user-nav {
+            margin-bottom: 20px;
+            padding-bottom:15px;
+            border-bottom: 1px solid #dee2e6;
+            text-align: right;
+            font-size: 0.9em;
+        }
+        .user-nav a {
+            font-weight: bold;
+            margin-left: 15px;
+        }
+        /* Status specific styles */
+        .status-permitido { color: #28a745; font-weight: bold; } /* Green */
+        .status-denegado { color: #dc3545; font-weight: bold; } /* Red */
     </style>
 </head>
 <body>
@@ -45,7 +102,7 @@
                         <tr>
                             <td>{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
                             <td>{{ log.qr_data }}</td>
-                            <td class="{% if log.access_granted %}permitido{% else %}denegado{% endif %}">
+                            <td class="{% if log.access_granted %}status-permitido{% else %}status-denegado{% endif %}">
                                 {% if log.access_granted %}
                                     Permitido
                                 {% else %}

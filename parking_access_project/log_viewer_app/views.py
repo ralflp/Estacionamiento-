@@ -5,7 +5,7 @@ from .models import (
 )
 from .forms import (
     PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm,
-    GuestRegistrationForm
+    GuestRegistrationForm, PersonProfileEditForm # PersonProfileEditForm importado
 )
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Group
@@ -182,6 +182,33 @@ def user_dashboard_view(request):
         'page_title': 'Mi Portal de Usuario'
     }
     return render(request, 'log_viewer_app/user_dashboard.html', context)
+
+@login_required
+def person_profile_edit_view(request):
+    try:
+        person_profile = Person.objects.get(user=request.user)
+    except Person.DoesNotExist:
+        messages.error(request, "No se encontró un perfil de persona asociado a tu usuario. Por favor, contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+    except Exception as e:
+        logger.error(f"Error buscando Person profile para user {request.user.username} en edición de perfil: {e}")
+        messages.error(request, "Ocurrió un error al cargar tu perfil.")
+        return redirect('log_viewer_app:user_dashboard')
+
+    if request.method == 'POST':
+        form = PersonProfileEditForm(request.POST, instance=person_profile)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Tu perfil ha sido actualizado exitosamente.")
+            return redirect('log_viewer_app:user_dashboard')
+    else:
+        form = PersonProfileEditForm(instance=person_profile)
+
+    context = {
+        'form': form,
+        'page_title': 'Editar Mi Perfil'
+    }
+    return render(request, 'log_viewer_app/person_profile_edit_form.html', context)
 
 @login_required
 def qr_scanner_page_view(request):

@@ -4,30 +4,117 @@
     <meta charset="UTF-8">
     <title>{{ page_title|default:"Formulario de Dispositivo de Control" }}</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        .container { max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-        form p { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="email"], select, textarea {
-            width: calc(100% - 22px);
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f9fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 700px; /* Suitable for forms */
+            margin: 20px auto;
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.075);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        form p {
+            margin-bottom: 18px;
+        }
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: bold;
+            color: #495057;
+        }
+        input[type="text"],
+        input[type="datetime-local"],
+        input[type="email"],
+        input[type="password"],
+        input[type="number"],
+        input[type="url"], /* Added for IP address field if it uses type="url" */
+        select,
+        textarea {
+            width: calc(100% - 24px);
             padding: 10px;
-            border: 1px solid #ccc;
+            border: 1px solid #ced4da;
             border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 1em;
         }
-        input[type="checkbox"] { width: auto; margin-right: 5px; }
-        button[type="submit"] {
-            background-color: #007bff; color: white; padding: 10px 15px;
-            border: none; border-radius: 4px; cursor: pointer;
+        select {
+            width: 100%;
+            appearance: none;
+            background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23007bff%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E');
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 10px;
+            padding-right: 30px;
         }
-        button[type="submit"]:hover { background-color: #0056b3; }
-        .form-errors { color: red; margin-bottom: 10px; }
-        a { color: #007bff; text-decoration: none; display: inline-block; margin-top:15px;}
-        a:hover { text-decoration: underline; }
+        input[type="checkbox"] {
+             width: auto;
+             margin-right: 8px;
+             vertical-align: middle;
+        }
+        textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+        button[type="submit"], .button-link {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #0056b3;
+            color: white;
+            font-weight: bold;
+            font-size: 1em;
+            text-decoration: none;
+            display: inline-block;
+            transition: background-color 0.2s ease-in-out;
+        }
+        button[type="submit"]:hover, .button-link:hover {
+            background-color: #003d80;
+            color: white;
+        }
+        .form-errors, .errorlist {
+            color: #dc3545;
+            margin-top: 4px;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+            list-style-type: none;
+            padding-left: 0;
+        }
+        small, .helptext {
+            display: block;
+            margin-top: 4px;
+            font-size: 0.85em;
+            color: #6c757d;
+        }
+        .back-link {
+            color: #0056b3;
+            text-decoration: none;
+            display: inline-block;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        .back-link:hover, .back-link:focus {
+            text-decoration: underline;
+            color: #003d80;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>{{ page_title }}</h1> <!-- Usar page_title directamente ya que se pasa desde la vista de update también -->
+        <h1>{{ page_title|default:"Formulario de Dispositivo de Control" }}</h1>
 
         <form method="post">
             {% csrf_token %}
@@ -43,7 +130,7 @@
                     {{ field.label_tag }}<br>
                     {{ field }}
                     {% if field.help_text %}
-                        <small style="color: grey">{{ field.help_text }}</small>
+                        <small class="helptext">{{ field.help_text }}</small>
                     {% endif %}
                     {% for error in field.errors %}
                         <div class="form-errors">{{ error }}</div>
@@ -53,7 +140,7 @@
 
             <button type="submit">Guardar Dispositivo</button>
         </form>
-        <a href="{% url 'log_viewer_app:control_device_list' %}">Volver a la Lista de Dispositivos</a>
+        <a href="{% url 'log_viewer_app:control_device_list' %}" class="back-link">Volver a la Lista de Dispositivos</a>
     </div>
 </body>
 </html>
