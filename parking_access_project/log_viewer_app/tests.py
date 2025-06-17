@@ -718,95 +718,153 @@ class AccessVerificationAPITest(TestCase):
         self.assertIn('access_point_name', response.data)
 
 class UserDashboardViewTest(TestCase):
-    def setUp(self):
-        self.client = Client()
-        self.test_user = User.objects.create_user(username='dashboarduser', password='password')
-        self.person_profile = Person.objects.create(user=self.test_user, full_name="Dashboard User", identifier="DASH_ID")
-        self.ap1 = AccessPoint.objects.create(name="AP Dashboard 1")
-        self.ap2 = AccessPoint.objects.create(name="AP Dashboard 2")
-        self.ap3 = AccessPoint.objects.create(name="AP Dashboard 3")
-        AccessPermission.objects.create(person=self.person_profile, access_point=self.ap1, is_active=True, valid_from=timezone.now(), valid_until=timezone.now() + timedelta(days=5))
-        AccessPermission.objects.create(person=self.person_profile, access_point=self.ap2, is_active=True, valid_from=timezone.now() - timedelta(days=10), valid_until=timezone.now() - timedelta(days=5))
-        AccessPermission.objects.create(person=self.person_profile, access_point=self.ap3, is_active=False, valid_from=timezone.now(), valid_until=timezone.now() + timedelta(days=5))
-        Vehicle.objects.create(owner=self.person_profile, license_plate="DASH123", description="Dash Car 1")
-        Vehicle.objects.create(owner=self.person_profile, license_plate="DASH456", description="Dash Car 2")
-        self.user_no_profile = User.objects.create_user(username='nouserprofile', password='password')
-        self.dashboard_url = reverse('log_viewer_app:user_dashboard')
+    @classmethod
+    def setUpTestData(cls):
+        # Create Tenants
+        cls.tenant1 = Tenant.objects.create(name="Tenant Alpha", subdomain_prefix="alpha")
+        cls.tenant2 = Tenant.objects.create(name="Tenant Bravo", subdomain_prefix="bravo")
 
-        # For UserDashboardViewTest - data for subscriptions and invoices
-        self.service1 = Service.objects.create(name="Servicio Básico Dashboard", price=Decimal("30.00"))
-        self.subscription1 = UserSubscription.objects.create(
-            person=self.person_profile,
-            service=self.service1,
-            start_date=timezone.now().date() - timedelta(days=15),
-            billing_cycle='monthly',
-            is_active=True
-        )
-        self.invoice1 = Invoice.objects.create(
-            person=self.person_profile,
-            user_subscription=self.subscription1,
-            invoice_number="INV-DASH-001",
-            amount_due=Decimal("30.00"),
-            due_date=timezone.now().date() + timedelta(days=10),
-            status='pending'
-        )
-        self.user_with_profile_no_data = User.objects.create_user(username='emptydashuser', password='password')
-        self.person_with_profile_no_data = Person.objects.create(user=self.user_with_profile_no_data, full_name="Empty Dash User", identifier="EMPTY_DASH_ID")
+        # User 1 and their data (Tenant 1)
+        cls.user1 = User.objects.create_user(username='user1_t1', password='password_t1')
+        cls.person1 = Person.objects.create(user=cls.user1, full_name="User One Tenant1", identifier="U1T1_ID", tenant=cls.tenant1)
+
+        cls.ap1_t1 = AccessPoint.objects.create(name="AP1 Tenant1", tenant=cls.tenant1)
+        cls.ap2_t1 = AccessPoint.objects.create(name="AP2 Tenant1", tenant=cls.tenant1) # Expired/Inactive
+        cls.perm1_t1_active = AccessPermission.objects.create(person=cls.person1, access_point=cls.ap1_t1, is_active=True, valid_from=timezone.now(), valid_until=timezone.now() + timedelta(days=5), tenant=cls.tenant1)
+        AccessPermission.objects.create(person=cls.person1, access_point=cls.ap2_t1, is_active=False, tenant=cls.tenant1) # Inactive perm
+
+        cls.vehicle1_t1 = Vehicle.objects.create(owner=cls.person1, license_plate="CAR1T1", description="Car User1 T1", tenant=cls.tenant1)
+
+        cls.service1_t1 = Service.objects.create(name="Service T1", price=Decimal("10.00"), tenant=cls.tenant1)
+        cls.sub1_t1 = UserSubscription.objects.create(person=cls.person1, service=cls.service1_t1, start_date=timezone.now().date() - timedelta(days=10), is_active=True, tenant=cls.tenant1)
+
+        cls.invoice1_t1_pending = Invoice.objects.create(person=cls.person1, user_subscription=cls.sub1_t1, invoice_number="INV001T1", amount_due=Decimal("10.00"), due_date=timezone.now().date() + timedelta(days=5), status='pending', tenant=cls.tenant1)
+        cls.invoice2_t1_overdue = Invoice.objects.create(person=cls.person1, invoice_number="INV002T1", amount_due=Decimal("15.00"), due_date=timezone.now().date() - timedelta(days=1), status='overdue', tenant=cls.tenant1)
+        cls.invoice3_t1_paid = Invoice.objects.create(person=cls.person1, invoice_number="INV003T1", amount_due=Decimal("5.00"), status='paid', due_date=timezone.now().date() - timedelta(days=1), tenant=cls.tenant1)
+        cls.expected_total_due_tenant1 = cls.invoice1_t1_pending.amount_due + cls.invoice2_t1_overdue.amount_due
+
+        # User 2 and their data (Tenant 2)
+        cls.user2 = User.objects.create_user(username='user2_t2', password='password_t2')
+        cls.person2 = Person.objects.create(user=cls.user2, full_name="User Two Tenant2", identifier="U2T2_ID", tenant=cls.tenant2)
+
+        cls.ap1_t2 = AccessPoint.objects.create(name="AP1 Tenant2", tenant=cls.tenant2)
+        cls.perm1_t2_active = AccessPermission.objects.create(person=cls.person2, access_point=cls.ap1_t2, is_active=True, tenant=cls.tenant2)
+
+        cls.vehicle1_t2 = Vehicle.objects.create(owner=cls.person2, license_plate="CAR1T2", description="Car User2 T2", tenant=cls.tenant2)
+
+        cls.service1_t2 = Service.objects.create(name="Service T2", price=Decimal("20.00"), tenant=cls.tenant2)
+        cls.sub1_t2 = UserSubscription.objects.create(person=cls.person2, service=cls.service1_t2, is_active=True, tenant=cls.tenant2)
+
+        cls.invoice1_t2_pending = Invoice.objects.create(person=cls.person2, user_subscription=cls.sub1_t2, invoice_number="INV001T2", amount_due=Decimal("20.00"), status='pending', due_date=timezone.now().date() + timedelta(days=5), tenant=cls.tenant2)
+        cls.expected_total_due_tenant2 = cls.invoice1_t2_pending.amount_due
+
+        # Other users for specific tests
+        cls.user_no_profile = User.objects.create_user(username='nouserprofile_dash', password='password')
+
+        cls.user_with_profile_no_data = User.objects.create_user(username='emptydashuser_dash', password='password')
+        # This person is in tenant1 but will have no specific data items created for them directly in tests.
+        cls.person_with_profile_no_data = Person.objects.create(user=cls.user_with_profile_no_data, full_name="Empty Dash User T1", identifier="EMPTY_DASH_ID_T1", tenant=cls.tenant1)
+
+        cls.dashboard_url = reverse('log_viewer_app:user_dashboard')
+        # LOGIN_URL is hardcoded to '/accounts/login/' in PersonProfileEditViewTest's setUp, use that for consistency if needed
+        # For dashboard, @login_required will use settings.LOGIN_URL
+        cls.login_url_setting = settings.LOGIN_URL
 
 
     def test_dashboard_redirects_if_not_logged_in(self):
         response = self.client.get(self.dashboard_url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn(settings.LOGIN_URL, response.url)
+        # Use cls.login_url_setting as defined in setUpTestData
+        self.assertIn(self.login_url_setting, response.url)
 
     def test_dashboard_user_without_person_profile(self):
-        self.client.login(username='nouserprofile', password='password')
+        self.client.login(username='nouserprofile_dash', password='password')
         response = self.client.get(self.dashboard_url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'log_viewer_app/user_dashboard.html')
         self.assertIsNone(response.context['person_profile'])
+        self.assertIsNone(response.context['active_tenant'])
         self.assertContains(response, "Tu usuario no está asociado a un perfil de persona")
 
-    def test_dashboard_user_with_profile_displays_data(self): # Updated
-        self.client.login(username='dashboarduser', password='password')
+    def test_dashboard_user1_displays_tenant1_data(self):
+        self.client.login(username='user1_t1', password='password_t1')
         response = self.client.get(self.dashboard_url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'log_viewer_app/user_dashboard.html')
-        self.assertEqual(response.context['person_profile'], self.person_profile)
 
-        # Permissions (only one active and current)
+        self.assertEqual(response.context['person_profile'], self.person1)
+        self.assertEqual(response.context['active_tenant'], self.tenant1)
+
+        # Permissions
+        self.assertIn(self.perm1_t1_active, response.context['user_permissions'])
         self.assertEqual(len(response.context['user_permissions']), 1)
-        self.assertEqual(response.context['user_permissions'][0].access_point, self.ap1)
-        self.assertContains(response, self.ap1.name)
-        self.assertNotContains(response, self.ap2.name)
-        self.assertNotContains(response, self.ap3.name)
+        self.assertNotContains(response, self.ap2_t1.name) # Inactive/Expired
+        self.assertNotContains(response, self.ap1_t2.name) # Tenant 2's AP
 
         # Vehicles
-        self.assertEqual(len(response.context['user_vehicles']), 2)
-        self.assertContains(response, "DASH123")
+        self.assertIn(self.vehicle1_t1, response.context['user_vehicles'])
+        self.assertEqual(len(response.context['user_vehicles']), 1)
+        self.assertNotContains(response, self.vehicle1_t2.license_plate) # Tenant 2's vehicle
 
         # Subscriptions
-        self.assertIn('user_subscriptions', response.context)
+        self.assertIn(self.sub1_t1, response.context['user_subscriptions'])
         self.assertEqual(len(response.context['user_subscriptions']), 1)
-        self.assertEqual(response.context['user_subscriptions'][0], self.subscription1)
-        self.assertContains(response, self.service1.name)
-        self.assertContains(response, f"{self.subscription1.get_effective_price():.2f}")
-
+        self.assertNotContains(response, self.service1_t2.name) # Tenant 2's service
 
         # Invoices
-        self.assertIn('user_invoices', response.context)
-        self.assertEqual(len(response.context['user_invoices']), 1)
-        self.assertEqual(response.context['user_invoices'][0], self.invoice1)
-        self.assertContains(response, self.invoice1.invoice_number)
-        self.assertContains(response, f"{self.invoice1.amount_due:.2f}")
+        self.assertIn(self.invoice1_t1_pending, response.context['user_invoices'])
+        self.assertIn(self.invoice2_t1_overdue, response.context['user_invoices'])
+        self.assertIn(self.invoice3_t1_paid, response.context['user_invoices'])
+        self.assertEqual(len(response.context['user_invoices']), 3)
+        self.assertNotContains(response, self.invoice1_t2_pending.invoice_number) # Tenant 2's invoice
+
+        # Total Amount Due
+        self.assertEqual(response.context['total_amount_due'], self.expected_total_due_tenant1)
+        self.assertContains(response, f"{self.expected_total_due_tenant1:.2f}")
 
 
-    def test_dashboard_user_with_profile_no_specific_data(self): # Renamed and updated
-        self.client.login(username='emptydashuser', password='password')
+    def test_dashboard_user2_displays_tenant2_data(self):
+        self.client.login(username='user2_t2', password='password_t2')
         response = self.client.get(self.dashboard_url)
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'log_viewer_app/user_dashboard.html')
+
+        self.assertEqual(response.context['person_profile'], self.person2)
+        self.assertEqual(response.context['active_tenant'], self.tenant2)
+
+        # Permissions
+        self.assertIn(self.perm1_t2_active, response.context['user_permissions'])
+        self.assertEqual(len(response.context['user_permissions']), 1)
+        self.assertNotContains(response, self.ap1_t1.name) # Tenant 1's AP
+
+        # Vehicles
+        self.assertIn(self.vehicle1_t2, response.context['user_vehicles'])
+        self.assertEqual(len(response.context['user_vehicles']), 1)
+        self.assertNotContains(response, self.vehicle1_t1.license_plate) # Tenant 1's vehicle
+
+        # Subscriptions
+        self.assertIn(self.sub1_t2, response.context['user_subscriptions'])
+        self.assertEqual(len(response.context['user_subscriptions']), 1)
+        self.assertNotContains(response, self.service1_t1.name) # Tenant 1's service
+
+        # Invoices
+        self.assertIn(self.invoice1_t2_pending, response.context['user_invoices'])
+        self.assertEqual(len(response.context['user_invoices']), 1)
+        self.assertNotContains(response, self.invoice1_t1_pending.invoice_number) # Tenant 1's invoice
+
+        # Total Amount Due
+        self.assertEqual(response.context['total_amount_due'], self.expected_total_due_tenant2)
+        self.assertContains(response, f"{self.expected_total_due_tenant2:.2f}")
+
+
+    def test_dashboard_user_with_profile_no_specific_data(self):
+        self.client.login(username='emptydashuser_dash', password='password')
+        response = self.client.get(self.dashboard_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'log_viewer_app/user_dashboard.html')
+
         self.assertEqual(response.context['person_profile'], self.person_with_profile_no_data)
+        self.assertEqual(response.context['active_tenant'], self.tenant1) # This user is in tenant1
 
         self.assertEqual(len(response.context['user_permissions']), 0)
         self.assertContains(response, "No tienes permisos de acceso activos o futuros asignados.")
@@ -814,32 +872,46 @@ class UserDashboardViewTest(TestCase):
         self.assertEqual(len(response.context['user_vehicles']), 0)
         self.assertContains(response, "No tienes vehículos registrados.")
 
-        self.assertIn('user_subscriptions', response.context)
         self.assertEqual(len(response.context['user_subscriptions']), 0)
         self.assertContains(response, "No tienes suscripciones registradas.")
 
-        self.assertIn('user_invoices', response.context)
         self.assertEqual(len(response.context['user_invoices']), 0)
         self.assertContains(response, "No tienes facturas generadas.")
 
+        self.assertEqual(response.context['total_amount_due'], Decimal('0.00'))
+        # Ensure no data from tenant2 is shown
+        self.assertNotContains(response, self.ap1_t2.name)
+        self.assertNotContains(response, self.vehicle1_t2.license_plate)
+        self.assertNotContains(response, self.invoice1_t2_pending.invoice_number)
+
+
 class UserPermissionsListAPITest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant_api = Tenant.objects.create(name="Tenant for API Test", subdomain_prefix="apitest")
+        cls.user1 = User.objects.create_user(username='user1perm_api', password='password1')
+        cls.person1 = Person.objects.create(full_name="User One Perms API", identifier="U1P_API", user=cls.user1, tenant=cls.tenant_api)
+        cls.token1 = Token.objects.create(user=cls.user1)
+
+        cls.ap1 = AccessPoint.objects.create(name="AP Test 1 API", tenant=cls.tenant_api)
+        cls.ap2 = AccessPoint.objects.create(name="AP Test 2 API", tenant=cls.tenant_api)
+        AccessPermission.objects.create(person=cls.person1, access_point=cls.ap1, is_active=True, tenant=cls.tenant_api)
+        AccessPermission.objects.create(person=cls.person1, access_point=cls.ap2, is_active=False, tenant=cls.tenant_api)
+
+        cls.user2 = User.objects.create_user(username='user2noperm_api', password='password2')
+        cls.person2 = Person.objects.create(full_name="User Two No Perms API", identifier="U2NP_API", user=cls.user2, tenant=cls.tenant_api)
+        cls.token2 = Token.objects.create(user=cls.user2)
+
+        cls.user3_no_profile = User.objects.create_user(username='user3noprofile_api', password='password3')
+        cls.token3 = Token.objects.create(user=cls.user3_no_profile)
+
+        cls.url = reverse('log_viewer_app:api_user_permissions')
+
     def setUp(self):
         self.client = APIClient()
-        self.user1 = User.objects.create_user(username='user1perm', password='password1')
-        self.person1 = Person.objects.create(full_name="User One Perms", identifier="U1P", user=self.user1)
-        self.token1 = Token.objects.create(user=self.user1)
-        self.ap1 = AccessPoint.objects.create(name="AP Test 1"); self.ap2 = AccessPoint.objects.create(name="AP Test 2")
-        AccessPermission.objects.create(person=self.person1, access_point=self.ap1, is_active=True)
-        AccessPermission.objects.create(person=self.person1, access_point=self.ap2, is_active=False)
-        self.user2 = User.objects.create_user(username='user2noperm', password='password2')
-        self.person2 = Person.objects.create(full_name="User Two No Perms", identifier="U2NP", user=self.user2)
-        self.token2 = Token.objects.create(user=self.user2)
-        self.user3_no_profile = User.objects.create_user(username='user3noprofile', password='password3')
-        self.token3 = Token.objects.create(user=self.user3_no_profile)
-        self.url = reverse('log_viewer_app:api_user_permissions')
 
     def test_list_permissions_unauthenticated(self):
-        unauth_client = APIClient(); response = unauth_client.get(self.url)
+        unauth_client = APIClient(); response = unauth_client.get(self.url) # This local var is fine
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
     def test_list_permissions_user_with_permissions(self):
         self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token1.key); response = self.client.get(self.url)

@@ -135,29 +135,38 @@ def user_dashboard_view(request):
     user_subscriptions = []
     user_invoices = []
     total_amount_due = Decimal('0.00') # Initialize here
+    active_tenant = None # Initialize active_tenant
 
     try:
         person_profile = Person.objects.get(user=user)
         if person_profile:
+            active_tenant = person_profile.tenant # Get the tenant from the profile
+
             now_date = timezone.now().date()
             user_permissions = AccessPermission.objects.filter(
                 person=person_profile,
+                tenant=active_tenant, # Filter by tenant
                 is_active=True
             ).filter(
                 Q(valid_until__isnull=True) | Q(valid_until__gte=now_date)
-            ).select_related('access_point').order_by('access_point__name')
+            ).select_related('access_point', 'tenant').order_by('access_point__name') # Added tenant to select_related
 
-            user_vehicles = Vehicle.objects.filter(owner=person_profile).order_by('license_plate')
+            user_vehicles = Vehicle.objects.filter(
+                owner=person_profile,
+                tenant=active_tenant # Filter by tenant
+            ).select_related('owner', 'tenant').order_by('license_plate') # Added tenant to select_related
 
             user_subscriptions = UserSubscription.objects.filter(
-                person=person_profile
-            ).select_related('service').order_by('service__name', '-start_date')
+                person=person_profile,
+                tenant=active_tenant # Filter by tenant
+            ).select_related('service', 'person', 'tenant').order_by('service__name', '-start_date') # Added tenant to select_related
 
             user_invoices = Invoice.objects.filter(
-                person=person_profile
-            ).select_related('user_subscription__service', 'person').order_by('-due_date', '-created_at')
+                person=person_profile,
+                tenant=active_tenant # Filter by tenant
+            ).select_related('user_subscription__service', 'person', 'tenant').order_by('-due_date', '-created_at') # Added tenant to select_related
 
-            # Calculate total amount due from pending/overdue invoices
+            # Calculate total amount due from pending/overdue invoices (already filtered by tenant via user_invoices)
             due_invoices_aggregation = user_invoices.filter(
                 status__in=['pending', 'overdue']
             ).aggregate(total_due=Sum('amount_due'))
@@ -178,7 +187,8 @@ def user_dashboard_view(request):
         'user_vehicles': user_vehicles,
         'user_subscriptions': user_subscriptions,
         'user_invoices': user_invoices,
-        'total_amount_due': total_amount_due, # Added to context
+        'total_amount_due': total_amount_due,
+        'active_tenant': active_tenant, # Added active_tenant to context
         'page_title': 'Mi Portal de Usuario'
     }
     return render(request, 'log_viewer_app/user_dashboard.html', context)
