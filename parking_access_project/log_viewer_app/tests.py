@@ -544,30 +544,136 @@ class MQTTUtilsTest(TestCase):
 class VerifyAccessLogicTest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.person1 = Person.objects.create(full_name="Allowed User", identifier="ALLOW_ID"); cls.person2 = Person.objects.create(full_name="NoPerm User", identifier="NOPERM_ID"); cls.person3 = Person.objects.create(full_name="InactivePerm User", identifier="INACTIVE_ID"); cls.person4 = Person.objects.create(full_name="FuturePerm User", identifier="FUTURE_ID"); cls.person5 = Person.objects.create(full_name="ExpiredPerm User", identifier="EXPIRED_ID"); cls.person6 = Person.objects.create(full_name="TimeValid User", identifier="TIMEVALID_ID")
-        cls.ap1 = AccessPoint.objects.create(name="MainDoor"); cls.ap_mqtt = AccessPoint.objects.create(name="MQTT_Controlled_Door")
-        AccessPermission.objects.create(person=cls.person1, access_point=cls.ap1, is_active=True); AccessPermission.objects.create(person=cls.person3, access_point=cls.ap1, is_active=False); AccessPermission.objects.create(person=cls.person4, access_point=cls.ap1, is_active=True, valid_from=timezone.now() + timedelta(days=1)); AccessPermission.objects.create(person=cls.person5, access_point=cls.ap1, is_active=True, valid_until=timezone.now() - timedelta(days=1)); AccessPermission.objects.create(person=cls.person6, access_point=cls.ap1, is_active=True, valid_from=timezone.now() - timedelta(hours=1), valid_until=timezone.now() + timedelta(hours=1))
-        cls.device1_ap_mqtt = ControlDevice.objects.create(name="MQTT_Door_Ctrl1", device_id="CTRL_MQTT1", access_point=cls.ap_mqtt, mqtt_topic="door/mqtt1/open", is_active=True)
-        cls.person_mqtt = Person.objects.create(full_name="MQTT Access User", identifier="MQTT_ACCESS_ID"); AccessPermission.objects.create(person=cls.person_mqtt, access_point=cls.ap_mqtt, is_active=True)
-    def tearDown(self): AccessLog.objects.all().delete()
-    def test_access_allowed(self): self.assertTrue(verify_access_with_models("ALLOW_ID", "MainDoor"))
-    def test_person_not_found(self): self.assertFalse(verify_access_with_models("UNKNOWN_ID", "MainDoor"))
+        cls.tenant1 = Tenant.objects.create(name="VAL Tenant 1", subdomain_prefix="val1")
+        cls.tenant2 = Tenant.objects.create(name="VAL Tenant 2", subdomain_prefix="val2")
+
+        # Tenant 1 data
+        cls.person_t1_allow = Person.objects.create(tenant=cls.tenant1, full_name="Allowed User T1", identifier="ALLOW_T1_ID")
+        cls.person_t1_noperm = Person.objects.create(tenant=cls.tenant1, full_name="NoPerm User T1", identifier="NOPERM_T1_ID")
+        cls.person_t1_inactive = Person.objects.create(tenant=cls.tenant1, full_name="InactivePerm User T1", identifier="INACTIVE_T1_ID")
+        cls.person_t1_future = Person.objects.create(tenant=cls.tenant1, full_name="FuturePerm User T1", identifier="FUTURE_T1_ID")
+        cls.person_t1_expired = Person.objects.create(tenant=cls.tenant1, full_name="ExpiredPerm User T1", identifier="EXPIRED_T1_ID")
+        cls.person_t1_timevalid = Person.objects.create(tenant=cls.tenant1, full_name="TimeValid User T1", identifier="TIMEVALID_T1_ID")
+
+        cls.ap_t1_main = AccessPoint.objects.create(tenant=cls.tenant1, name="MainDoorT1")
+        cls.ap_t1_mqtt = AccessPoint.objects.create(tenant=cls.tenant1, name="MQTTDoorT1")
+
+        AccessPermission.objects.create(tenant=cls.tenant1, person=cls.person_t1_allow, access_point=cls.ap_t1_main, is_active=True)
+        AccessPermission.objects.create(tenant=cls.tenant1, person=cls.person_t1_inactive, access_point=cls.ap_t1_main, is_active=False)
+        AccessPermission.objects.create(tenant=cls.tenant1, person=cls.person_t1_future, access_point=cls.ap_t1_main, is_active=True, valid_from=timezone.now() + timedelta(days=1))
+        AccessPermission.objects.create(tenant=cls.tenant1, person=cls.person_t1_expired, access_point=cls.ap_t1_main, is_active=True, valid_until=timezone.now() - timedelta(days=1))
+        AccessPermission.objects.create(tenant=cls.tenant1, person=cls.person_t1_timevalid, access_point=cls.ap_t1_main, is_active=True, valid_from=timezone.now() - timedelta(hours=1), valid_until=timezone.now() + timedelta(hours=1))
+
+        cls.device_t1_ap_mqtt = ControlDevice.objects.create(tenant=cls.tenant1, name="MQTT_Door_Ctrl_T1", device_id="CTRL_MQTT_T1", access_point=cls.ap_t1_mqtt, mqtt_topic="tenant1/door/open", is_active=True)
+        cls.person_t1_mqtt = Person.objects.create(tenant=cls.tenant1, full_name="MQTT Access User T1", identifier="MQTT_ACCESS_T1_ID")
+        AccessPermission.objects.create(tenant=cls.tenant1, person=cls.person_t1_mqtt, access_point=cls.ap_t1_mqtt, is_active=True)
+
+        # Tenant 2 data
+        cls.person_t2_allow = Person.objects.create(tenant=cls.tenant2, full_name="Allowed User T2", identifier="ALLOW_T2_ID")
+        cls.ap_t2_main = AccessPoint.objects.create(tenant=cls.tenant2, name="MainDoorT2")
+        AccessPermission.objects.create(tenant=cls.tenant2, person=cls.person_t2_allow, access_point=cls.ap_t2_main, is_active=True)
+        cls.device_t2_ap_main = ControlDevice.objects.create(tenant=cls.tenant2, name="Main_Door_Ctrl_T2", device_id="CTRL_MAIN_T2", access_point=cls.ap_t2_main, mqtt_topic="tenant2/door/open", is_active=True)
+
+
+    def tearDown(self):
+        AccessLog.objects.all().delete() # Keep if specific log checks are needed, otherwise default test rollback is fine.
+
+    def test_access_allowed(self):
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="ALLOW_T1_ID", access_point_name="MainDoorT1"))
+
+    def test_person_not_found(self):
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="UNKNOWN_T1_ID", access_point_name="MainDoorT1"))
+
     @patch('log_viewer_app.utils.publish_mqtt_message')
-    def test_access_granted_triggers_mqtt_publish_single_device(self, mock_publish): mock_publish.return_value=True; self.assertTrue(verify_access_with_models("MQTT_ACCESS_ID", "MQTT_Controlled_Door")); mock_publish.assert_called_once_with(topic=self.device1_ap_mqtt.mqtt_topic, payload="OPEN")
+    def test_access_granted_triggers_mqtt_publish_single_device(self, mock_publish):
+        mock_publish.return_value=True
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="MQTT_ACCESS_T1_ID", access_point_name="MQTTDoorT1"))
+        mock_publish.assert_called_once_with(topic=self.device_t1_ap_mqtt.mqtt_topic, payload="OPEN")
+
     @patch('log_viewer_app.utils.publish_mqtt_message')
-    def test_access_granted_no_active_devices(self, mock_publish): ControlDevice.objects.filter(device_id="CTRL_MQTT1").update(is_active=False); self.assertTrue(verify_access_with_models("MQTT_ACCESS_ID", "MQTT_Controlled_Door")); mock_publish.assert_not_called(); ControlDevice.objects.filter(device_id="CTRL_MQTT1").update(is_active=True)
+    def test_access_granted_no_active_devices(self, mock_publish):
+        self.device_t1_ap_mqtt.is_active = False; self.device_t1_ap_mqtt.save()
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="MQTT_ACCESS_T1_ID", access_point_name="MQTTDoorT1"))
+        mock_publish.assert_not_called()
+        self.device_t1_ap_mqtt.is_active = True; self.device_t1_ap_mqtt.save() # Reset state
+
     @patch('log_viewer_app.utils.publish_mqtt_message')
-    def test_access_denied_no_mqtt_publish(self, mock_publish): self.assertFalse(verify_access_with_models("NOPERM_ID", "MQTT_Controlled_Door")); mock_publish.assert_not_called()
+    def test_access_denied_no_mqtt_publish(self, mock_publish):
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="NOPERM_T1_ID", access_point_name="MQTTDoorT1"))
+        mock_publish.assert_not_called()
+
     @patch('log_viewer_app.utils.publish_mqtt_message')
-    def test_multiple_active_devices_mqtt_publish(self, mock_publish): mock_publish.return_value=True; dev_extra = ControlDevice.objects.create(name="ExtraDev", device_id="EXTRA01", access_point=self.ap_mqtt, mqtt_topic="extra/topic", is_active=True); self.assertTrue(verify_access_with_models("MQTT_ACCESS_ID", "MQTT_Controlled_Door")); self.assertEqual(mock_publish.call_count, 2); topics = [c.kwargs['topic'] for c in mock_publish.call_args_list]; self.assertCountEqual(topics, [self.device1_ap_mqtt.mqtt_topic, dev_extra.mqtt_topic]); dev_extra.delete()
-    def test_access_point_not_found(self): self.assertFalse(verify_access_with_models("ALLOW_ID", "NonExistentDoor"))
-    def test_permission_not_found(self): self.assertFalse(verify_access_with_models("NOPERM_ID", "MainDoor"))
-    def test_permission_inactive(self): self.assertFalse(verify_access_with_models("INACTIVE_ID", "MainDoor"))
-    def test_permission_future_valid_from(self): self.assertFalse(verify_access_with_models("FUTURE_ID", "MainDoor"))
-    def test_permission_expired_valid_until(self): self.assertFalse(verify_access_with_models("EXPIRED_ID", "MainDoor"))
-    def test_permission_time_valid(self): self.assertTrue(verify_access_with_models("TIMEVALID_ID", "MainDoor"))
-    def test_permission_valid_from_only_no_end(self): p, _ = Person.objects.get_or_create(identifier="NOEND_ID", defaults={'full_name':"PermNoEnd User"}); AccessPermission.objects.get_or_create(person=p,access_point=self.ap1,defaults={'is_active':True,'valid_from':timezone.now()-timedelta(days=1),'valid_until':None}); self.assertTrue(verify_access_with_models("NOEND_ID", "MainDoor"))
-    def test_permission_default_valid_from_no_end(self): p, _ = Person.objects.get_or_create(identifier="DEFAULTSTART_ID", defaults={'full_name':"PermDefaultStart User"}); AccessPermission.objects.get_or_create(person=p,access_point=self.ap1,defaults={'is_active':True,'valid_until':None}); self.assertTrue(verify_access_with_models("DEFAULTSTART_ID", "MainDoor"))
+    def test_multiple_active_devices_mqtt_publish(self, mock_publish):
+        mock_publish.return_value=True
+        dev_extra = ControlDevice.objects.create(tenant=self.tenant1, name="ExtraDevT1", device_id="EXTRA_T1_01", access_point=self.ap_t1_mqtt, mqtt_topic="tenant1/extra/topic", is_active=True)
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="MQTT_ACCESS_T1_ID", access_point_name="MQTTDoorT1"))
+        self.assertEqual(mock_publish.call_count, 2)
+        topics = [c.kwargs['topic'] for c in mock_publish.call_args_list]
+        self.assertCountEqual(topics, [self.device_t1_ap_mqtt.mqtt_topic, dev_extra.mqtt_topic])
+        dev_extra.delete()
+
+    def test_access_point_not_found(self):
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="ALLOW_T1_ID", access_point_name="NonExistentDoorT1"))
+
+    def test_permission_not_found(self):
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="NOPERM_T1_ID", access_point_name="MainDoorT1"))
+
+    def test_permission_inactive(self):
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="INACTIVE_T1_ID", access_point_name="MainDoorT1"))
+
+    def test_permission_future_valid_from(self):
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="FUTURE_T1_ID", access_point_name="MainDoorT1"))
+
+    def test_permission_expired_valid_until(self):
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="EXPIRED_T1_ID", access_point_name="MainDoorT1"))
+
+    def test_permission_time_valid(self):
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="TIMEVALID_T1_ID", access_point_name="MainDoorT1"))
+
+    def test_permission_valid_from_only_no_end(self):
+        p, _ = Person.objects.get_or_create(tenant=self.tenant1, identifier="NOEND_T1_ID", defaults={'full_name':"PermNoEnd User T1"})
+        AccessPermission.objects.get_or_create(tenant=self.tenant1, person=p,access_point=self.ap_t1_main,defaults={'is_active':True,'valid_from':timezone.now()-timedelta(days=1),'valid_until':None})
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="NOEND_T1_ID", access_point_name="MainDoorT1"))
+
+    def test_permission_default_valid_from_no_end(self):
+        p, _ = Person.objects.get_or_create(tenant=self.tenant1, identifier="DEFAULTSTART_T1_ID", defaults={'full_name':"PermDefaultStart User T1"})
+        AccessPermission.objects.get_or_create(tenant=self.tenant1, person=p,access_point=self.ap_t1_main,defaults={'is_active':True,'valid_until':None}) # valid_from defaults to now()
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier="DEFAULTSTART_T1_ID", access_point_name="MainDoorT1"))
+
+    # Tenant Isolation Tests
+    def test_access_denied_person_from_different_tenant(self):
+        """Person from T1, AP from T1, but verification queried against T2."""
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant2, qr_identifier=self.person_t1_allow.identifier, access_point_name=self.ap_t1_main.name))
+
+    def test_access_denied_ap_from_different_tenant(self):
+        """Person from T1, AP from T2, verification queried against T1."""
+        self.assertFalse(verify_access_with_models(active_tenant=self.tenant1, qr_identifier=self.person_t1_allow.identifier, access_point_name=self.ap_t2_main.name))
+
+    @patch('log_viewer_app.utils.publish_mqtt_message')
+    def test_mqtt_publish_device_tenant_mismatch(self, mock_publish):
+        """Access granted in tenant1, but control device is (incorrectly) in tenant2. MQTT should not publish."""
+        # This setup is a bit artificial as data integrity should prevent this.
+        # We'll simulate it by trying to use person_t1_allow (T1) at ap_t1_main (T1)
+        # but imagine the device for ap_t1_main was wrongly assigned to tenant2.
+        # The current verify_access_with_models filters ControlDevice by active_tenant, so this is implicitly tested.
+        # To make it more explicit:
+        # Grant permission for person_t1_allow at ap_t1_main (done in setup).
+        # Ensure device_t1_ap_mqtt is for ap_t1_mqtt (also T1).
+        # If we call verify_access_with_models with tenant1, it should find device_t1_ap_mqtt.
+        # If we were to change device_t1_ap_mqtt.tenant to tenant2, it should NOT be found.
+
+        original_device_tenant = self.device_t1_ap_mqtt.tenant
+        self.device_t1_ap_mqtt.tenant = self.tenant2
+        self.device_t1_ap_mqtt.save()
+
+        # Try to access using tenant1. Person, AP, Permission are in tenant1.
+        # But the device is now in tenant2. The filter should exclude it.
+        self.assertTrue(verify_access_with_models(active_tenant=self.tenant1, qr_identifier=self.person_t1_mqtt.identifier, access_point_name=self.ap_t1_mqtt.name))
+        mock_publish.assert_not_called() # Device is in wrong tenant, so it shouldn't be found/used.
+
+        self.device_t1_ap_mqtt.tenant = original_device_tenant # Revert
+        self.device_t1_ap_mqtt.save()
+
 
 # --- ProcessPaymentLogicTest and PaymentAdminActionTest remain here ---
 class ProcessPaymentLogicTest(TestCase):
@@ -675,44 +781,95 @@ class TokenAuthAPITest(TestCase):
         self.assertNotIn('token', response.data)
 
 class AccessVerificationAPITest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant1 = Tenant.objects.create(name="API Tenant 1", subdomain_prefix="api1")
+        cls.tenant2 = Tenant.objects.create(name="API Tenant 2", subdomain_prefix="api2")
+
+        # API User for Tenant 1
+        cls.api_user_t1 = User.objects.create_user(username='apiuser_t1', password='passwordt1')
+        cls.person_api_t1 = Person.objects.create(user=cls.api_user_t1, full_name="API User T1", identifier="API_USER_T1_ID", tenant=cls.tenant1)
+        cls.token_t1 = Token.objects.create(user=cls.api_user_t1)
+
+        # API User for Tenant 2
+        cls.api_user_t2 = User.objects.create_user(username='apiuser_t2', password='passwordt2')
+        cls.person_api_t2 = Person.objects.create(user=cls.api_user_t2, full_name="API User T2", identifier="API_USER_T2_ID", tenant=cls.tenant2)
+        cls.token_t2 = Token.objects.create(user=cls.api_user_t2)
+
+        # API User with no person profile
+        cls.api_user_no_profile = User.objects.create_user(username='api_no_profile', password='password_np')
+        cls.token_no_profile = Token.objects.create(user=cls.api_user_no_profile)
+
+        # Data for Tenant 1
+        cls.person_qr_t1 = Person.objects.create(tenant=cls.tenant1, full_name="QR Person T1", identifier="QR_T1_ID")
+        cls.ap_t1 = AccessPoint.objects.create(tenant=cls.tenant1, name="AP_T1_MainGate")
+        AccessPermission.objects.create(tenant=cls.tenant1, person=cls.person_qr_t1, access_point=cls.ap_t1, is_active=True)
+
+        # Data for Tenant 2 (Access Point)
+        cls.ap_t2 = AccessPoint.objects.create(tenant=cls.tenant2, name="AP_T2_SideGate")
+
+        cls.url = reverse('log_viewer_app:api_verify_access')
+
     def setUp(self):
         self.client = APIClient()
-        self.user = User.objects.create_user(username='testapiuser', password='testpassword')
-        self.token = Token.objects.create(user=self.user)
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token.key)
-        self.person_allowed = Person.objects.create(full_name="Allowed API User", identifier="QR_API_ALLOW")
-        self.ap_main = AccessPoint.objects.create(name="API_Main_Gate")
-        AccessPermission.objects.create(person=self.person_allowed, access_point=self.ap_main, is_active=True)
-        self.url = reverse('log_viewer_app:api_verify_access')
 
     def test_verify_access_unauthenticated(self):
-        unauth_client = APIClient()
-        response = unauth_client.post(self.url, {'qr_identifier': 'QR_API_ALLOW', 'access_point_name': 'API_Main_Gate'}, format='json')
+        # No token provided
+        response = self.client.post(self.url, {'qr_identifier': self.person_qr_t1.identifier, 'access_point_name': self.ap_t1.name}, format='json')
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_verify_access_authenticated_granted(self):
-        data = {'qr_identifier': 'QR_API_ALLOW', 'access_point_name': 'API_Main_Gate'}
+    def test_verify_access_authenticated_granted_t1(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_t1.key)
+        data = {'qr_identifier': self.person_qr_t1.identifier, 'access_point_name': self.ap_t1.name}
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['access_granted'])
-    def test_verify_access_authenticated_denied_no_permission(self):
-        data = {'qr_identifier': 'QR_API_DENY_NO_PERM', 'access_point_name': 'API_Main_Gate'}
-        Person.objects.create(full_name="No Perm API User", identifier="QR_API_DENY_NO_PERM")
+        self.assertIn(self.tenant1.name, response.data['message'])
+
+    def test_verify_access_authenticated_denied_no_permission_t1(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_t1.key)
+        # Person from T1, AP from T1, but no permission record
+        person_no_perm_t1 = Person.objects.create(tenant=self.tenant1, full_name="No Perm T1", identifier="QR_T1_NOPERM")
+        data = {'qr_identifier': person_no_perm_t1.identifier, 'access_point_name': self.ap_t1.name}
+        response = self.client.post(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK) # View still returns 200 for denied access
+        self.assertFalse(response.data['access_granted'])
+        self.assertIn(self.tenant1.name, response.data['message'])
+
+    def test_verify_access_authenticated_denied_person_not_found_in_tenant_t1(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_t1.key)
+        data = {'qr_identifier': 'QR_NON_EXISTENT_T1', 'access_point_name': self.ap_t1.name}
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data['access_granted'])
-    def test_verify_access_authenticated_denied_person_not_found(self):
-        data = {'qr_identifier': 'QR_NON_EXISTENT', 'access_point_name': 'API_Main_Gate'}
+        self.assertIn(self.tenant1.name, response.data['message'])
+
+    def test_verify_access_user_from_wrong_tenant(self):
+        """API User from T1 tries to verify QR for person in T1 at an AP that is in T2."""
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_t1.key)
+        data = {'qr_identifier': self.person_qr_t1.identifier, 'access_point_name': self.ap_t2.name} # ap_t2 is in Tenant 2
         response = self.client.post(self.url, data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_200_OK) # verify_access_models will deny due to AP not found in tenant1
         self.assertFalse(response.data['access_granted'])
+        self.assertIn(self.tenant1.name, response.data['message']) # Message should reflect tenant1 context
+
+    def test_verify_access_user_no_person_profile(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_no_profile.key)
+        data = {'qr_identifier': self.person_qr_t1.identifier, 'access_point_name': self.ap_t1.name}
+        response = self.client.post(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("El usuario API no tiene un perfil de persona asociado", response.data['message'])
+
     def test_verify_access_invalid_request_data_missing_qr(self):
-        data = {'access_point_name': 'API_Main_Gate'}
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_t1.key)
+        data = {'access_point_name': self.ap_t1.name}
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('qr_identifier', response.data)
+
     def test_verify_access_invalid_request_data_missing_ap(self):
-        data = {'qr_identifier': 'QR_API_ALLOW'}
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_t1.key)
+        data = {'qr_identifier': self.person_qr_t1.identifier}
         response = self.client.post(self.url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('access_point_name', response.data)
@@ -888,22 +1045,34 @@ class UserDashboardViewTest(TestCase):
 class UserPermissionsListAPITest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.tenant_api = Tenant.objects.create(name="Tenant for API Test", subdomain_prefix="apitest")
-        cls.user1 = User.objects.create_user(username='user1perm_api', password='password1')
-        cls.person1 = Person.objects.create(full_name="User One Perms API", identifier="U1P_API", user=cls.user1, tenant=cls.tenant_api)
-        cls.token1 = Token.objects.create(user=cls.user1)
+        cls.tenant1 = Tenant.objects.create(name="Perms API Tenant 1", subdomain_prefix="perms_api_t1")
+        cls.tenant2 = Tenant.objects.create(name="Perms API Tenant 2", subdomain_prefix="perms_api_t2")
 
-        cls.ap1 = AccessPoint.objects.create(name="AP Test 1 API", tenant=cls.tenant_api)
-        cls.ap2 = AccessPoint.objects.create(name="AP Test 2 API", tenant=cls.tenant_api)
-        AccessPermission.objects.create(person=cls.person1, access_point=cls.ap1, is_active=True, tenant=cls.tenant_api)
-        AccessPermission.objects.create(person=cls.person1, access_point=cls.ap2, is_active=False, tenant=cls.tenant_api)
+        # User 1 (Tenant 1)
+        cls.user1_t1 = User.objects.create_user(username='perms_user1_t1', password='password1')
+        cls.person1_t1 = Person.objects.create(full_name="Perms User One T1", identifier="P_U1T1_API", user=cls.user1_t1, tenant=cls.tenant1)
+        cls.token1_t1 = Token.objects.create(user=cls.user1_t1)
 
-        cls.user2 = User.objects.create_user(username='user2noperm_api', password='password2')
-        cls.person2 = Person.objects.create(full_name="User Two No Perms API", identifier="U2NP_API", user=cls.user2, tenant=cls.tenant_api)
-        cls.token2 = Token.objects.create(user=cls.user2)
+        cls.ap1_t1 = AccessPoint.objects.create(name="P_AP1_T1", tenant=cls.tenant1)
+        cls.ap2_t1 = AccessPoint.objects.create(name="P_AP2_T1", tenant=cls.tenant1)
+        cls.perm1_p1_t1 = AccessPermission.objects.create(person=cls.person1_t1, access_point=cls.ap1_t1, is_active=True, tenant=cls.tenant1)
+        cls.perm2_p1_t1 = AccessPermission.objects.create(person=cls.person1_t1, access_point=cls.ap2_t1, is_active=False, tenant=cls.tenant1) # Inactive
 
-        cls.user3_no_profile = User.objects.create_user(username='user3noprofile_api', password='password3')
-        cls.token3 = Token.objects.create(user=cls.user3_no_profile)
+        # User 2 (Tenant 2)
+        cls.user2_t2 = User.objects.create_user(username='perms_user2_t2', password='password2')
+        cls.person2_t2 = Person.objects.create(full_name="Perms User Two T2", identifier="P_U2T2_API", user=cls.user2_t2, tenant=cls.tenant2)
+        cls.token2_t2 = Token.objects.create(user=cls.user2_t2)
+        cls.ap1_t2 = AccessPoint.objects.create(name="P_AP1_T2", tenant=cls.tenant2)
+        cls.perm1_p2_t2 = AccessPermission.objects.create(person=cls.person2_t2, access_point=cls.ap1_t2, is_active=True, tenant=cls.tenant2)
+
+        # User with no permissions (Tenant 1)
+        cls.user_noperms_t1 = User.objects.create_user(username='perms_noperm_t1', password='password_np_t1')
+        cls.person_noperms_t1 = Person.objects.create(full_name="No Perms User T1", identifier="P_NP_U1T1_API", user=cls.user_noperms_t1, tenant=cls.tenant1)
+        cls.token_noperms_t1 = Token.objects.create(user=cls.user_noperms_t1)
+
+        # User with no person profile
+        cls.user_no_profile_perms = User.objects.create_user(username='perms_noprofile_api', password='password_np')
+        cls.token_no_profile_perms = Token.objects.create(user=cls.user_no_profile_perms)
 
         cls.url = reverse('log_viewer_app:api_user_permissions')
 
@@ -911,18 +1080,41 @@ class UserPermissionsListAPITest(TestCase):
         self.client = APIClient()
 
     def test_list_permissions_unauthenticated(self):
-        unauth_client = APIClient(); response = unauth_client.get(self.url) # This local var is fine
+        # Use a local APIClient for unauthenticated requests
+        unauth_client = APIClient()
+        response = unauth_client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-    def test_list_permissions_user_with_permissions(self):
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token1.key); response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK); self.assertEqual(len(response.data), 2)
-        self.assertContains(response, self.person1.full_name) ; self.assertContains(response, self.ap1.name)
+
+    def test_list_permissions_user1_t1_sees_only_t1_perms(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token1_t1.key)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2) # perm1_p1_t1 (active) and perm2_p1_t1 (inactive)
+
+        response_data_str = str(response.data)
+        self.assertIn(self.perm1_p1_t1.access_point.name, response_data_str)
+        self.assertIn(self.perm2_p1_t1.access_point.name, response_data_str)
+        self.assertNotIn(self.ap1_t2.name, response_data_str) # Ensure no Tenant 2 APs
+
+    def test_list_permissions_user2_t2_sees_only_t2_perms(self):
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token2_t2.key)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertIn(self.perm1_p2_t2.access_point.name, str(response.data))
+        self.assertNotIn(self.ap1_t1.name, str(response.data)) # Ensure no Tenant 1 APs
+
     def test_list_permissions_user_no_permissions(self):
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token2.key); response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK); self.assertEqual(len(response.data), 0)
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_noperms_t1.key)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+
     def test_list_permissions_user_no_person_profile(self):
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token3.key); response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK); self.assertEqual(len(response.data), 0)
+        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token_no_profile_perms.key)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK) # View returns empty list
+        self.assertEqual(len(response.data), 0)
 
 class QRScannerPageViewTest(TestCase):
     def setUp(self):

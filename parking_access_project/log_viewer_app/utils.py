@@ -1,4 +1,4 @@
-from .models import AccessLog, Person, AccessPoint, AccessPermission, ControlDevice, Payment, Invoice # Invoice model import added
+from .models import AccessLog, Person, AccessPoint, AccessPermission, ControlDevice, Payment, Invoice, Tenant # Tenant importado
 from django.utils import timezone
 import paho.mqtt.publish as publish
 from django.conf import settings
@@ -7,47 +7,99 @@ from datetime import timedelta # timedelta añadido
 
 logger = logging.getLogger(__name__)
 
-def record_access_attempt(qr_data_received, access_was_granted, event_type_observed="acceso_general", user_id_info=None):
+def record_access_attempt(active_tenant: Tenant, qr_data_received: str, access_was_granted: bool, event_type_observed: str ="acceso_general", user_id_info: str =None, notes: str = None):
     try:
         log_entry = AccessLog.objects.create(
-            qr_data=qr_data_received, access_granted=access_was_granted,
-            event_type=event_type_observed, user_id=user_id_info
+            tenant=active_tenant, # Asignar el tenant
+            qr_data=qr_data_received,
+            access_granted=access_was_granted,
+            event_type=event_type_observed,
+            user_id=user_id_info,
+            # notes=notes # Assuming 'notes' field exists in AccessLog model as per one of the earlier prompts. If not, this would need adjustment.
         )
         return log_entry
     except Exception as e:
-        logger.error(f"Error al crear la entrada de log en BD para QR '{qr_data_received}': {e}")
+        logger.error(f"Error al crear la entrada de log en BD para QR '{qr_data_received}' en tenant '{active_tenant}': {e}")
         return None
 
-def verify_access_with_models(qr_identifier, access_point_name):
-    person = None; access_point_obj = None; access_granted = False; user_id_for_log = None
+def verify_access_with_models(active_tenant: Tenant, qr_identifier: str, access_point_name: str) -> bool:
+    person = None
+    access_point_obj = None
+    access_granted = False
+    user_id_for_log = qr_identifier # Default to QR if person not found
+
+    if not active_tenant:
+        logger.error(f"verify_access_with_models llamada sin active_tenant para QR '{qr_identifier}' en AP '{access_point_name}'.")
+        # Log this attempt without a tenant if possible, or handle as a critical error.
+        # For now, we'll try to log it with a placeholder if record_access_attempt can handle a None tenant (it can't with type hints).
+        # This case should ideally not happen if called correctly.
+        # Consider how to get a 'default' tenant or if this is a hard failure.
+        # For now, let's assume record_access_attempt will fail if active_tenant is None.
+        # A more robust approach might be to fetch a global default tenant for logging if active_tenant is None.
+        # However, the function signature now requires active_tenant.
+        return False # Cannot proceed without a tenant
+
     try:
-        person = Person.objects.get(identifier=qr_identifier)
-        user_id_for_log = person.identifier
+        person = Person.objects.get(tenant=active_tenant, identifier=qr_identifier)
+        user_id_for_log = person.identifier # Use person's identifier if found
         try:
-            access_point_obj = AccessPoint.objects.get(name=access_point_name)
-            permission = AccessPermission.objects.get(person=person, access_point=access_point_obj)
-            now = timezone.now(); is_valid_time = True
-            if permission.valid_from and permission.valid_from > now: is_valid_time = False
-            if permission.valid_until and permission.valid_until < now: is_valid_time = False
-            if permission.is_active and is_valid_time: access_granted = True
-        except AccessPoint.DoesNotExist: logger.warning(f"Punto de acceso '{access_point_name}' no encontrado...")
-        except AccessPermission.DoesNotExist: logger.info(f"Permiso no encontrado para QR '{qr_identifier}' en AP '{access_point_name}'.")
+            access_point_obj = AccessPoint.objects.get(tenant=active_tenant, name=access_point_name)
+
+            permission = AccessPermission.objects.get(
+                tenant=active_tenant,
+                person=person,
+                access_point=access_point_obj
+            )
+
+            now = timezone.now()
+            is_valid_time = True
+            if permission.valid_from and permission.valid_from > now:
+                is_valid_time = False
+            if permission.valid_until and permission.valid_until < now:
+                is_valid_time = False
+
+            if permission.is_active and is_valid_time:
+                access_granted = True
+
+        except AccessPoint.DoesNotExist:
+            logger.warning(f"Punto de acceso '{access_point_name}' no encontrado en tenant '{active_tenant}'.")
+        except AccessPermission.DoesNotExist:
+            logger.info(f"Permiso no encontrado para QR '{qr_identifier}' en AP '{access_point_name}' en tenant '{active_tenant}'.")
+
     except Person.DoesNotExist:
-        logger.info(f"Persona con identificador QR '{qr_identifier}' no encontrada.")
-        user_id_for_log = qr_identifier
+        logger.info(f"Persona con identificador QR '{qr_identifier}' no encontrada en tenant '{active_tenant}'.")
+        # user_id_for_log remains qr_identifier
     except Exception as e:
-        logger.error(f"Error inesperado en verify_access_with_models para QR '{qr_identifier}': {e}")
-        user_id_for_log = qr_identifier; access_granted = False
+        logger.error(f"Error inesperado en verify_access_with_models para QR '{qr_identifier}' en tenant '{active_tenant}': {e}")
+        # user_id_for_log remains qr_identifier
+        access_granted = False # Ensure access is denied on unexpected error
+
     if access_granted and access_point_obj:
-        active_control_devices = ControlDevice.objects.filter(access_point=access_point_obj, is_active=True)
-        if not active_control_devices.exists(): logger.warning(f"Acceso concedido en {access_point_obj.name}, pero no hay ControlDevices activos...")
+        # Ensure access_point_obj is not None (it should be if access_granted is True through permission check)
+        active_control_devices = ControlDevice.objects.filter(
+            tenant=active_tenant, # Filter ControlDevice by tenant
+            access_point=access_point_obj,
+            is_active=True
+        )
+        if not active_control_devices.exists():
+            logger.warning(f"Acceso concedido en {access_point_obj.name} (Tenant: {active_tenant}), pero no hay ControlDevices activos.")
         else:
             for device in active_control_devices:
-                logger.info(f"Intentando abrir {access_point_obj.name} via {device.name} en {device.mqtt_topic}")
+                logger.info(f"Intentando abrir {access_point_obj.name} (Tenant: {active_tenant}) via {device.name} en {device.mqtt_topic}")
                 success = publish_mqtt_message(topic=device.mqtt_topic, payload="OPEN")
-                if success: logger.info(f"MQTT: Mensaje 'OPEN' publicado a {device.mqtt_topic} para {device.name}.")
-                else: logger.error(f"MQTT: Fallo al publicar 'OPEN' a {device.mqtt_topic} para {device.name}.")
-    record_access_attempt(qr_data_received=qr_identifier, access_was_granted=access_granted, event_type_observed="verificacion_modelo_django", user_id_info=user_id_for_log)
+                if success:
+                    logger.info(f"MQTT: Mensaje 'OPEN' publicado a {device.mqtt_topic} para {device.name}.")
+                else:
+                    logger.error(f"MQTT: Fallo al publicar 'OPEN' a {device.mqtt_topic} para {device.name}.")
+
+    record_access_attempt(
+        active_tenant=active_tenant,
+        qr_data_received=qr_identifier,
+        access_was_granted=access_granted,
+        event_type_observed="verificacion_modelo_django",
+        user_id_info=user_id_for_log
+        # notes field can be added if relevant details about the check are useful
+    )
     return access_granted
 
 def publish_mqtt_message(topic, payload, retain=False):

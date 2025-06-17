@@ -291,22 +291,97 @@ class AccessVerificationAPIView(APIView):
     def post(self, request, *args, **kwargs):
         serializer = AccessRequestSerializer(data=request.data)
         if serializer.is_valid():
-            qr_identifier = serializer.validated_data['qr_identifier']; access_point_name = serializer.validated_data['access_point_name']
-            access_granted = verify_access_with_models(qr_identifier, access_point_name)
-            person_name_for_response = None
-            try: person = Person.objects.get(identifier=qr_identifier); person_name_for_response = person.full_name
-            except Person.DoesNotExist: pass
-            response_data = {'access_granted': access_granted, 'message': "Acceso Permitido" if access_granted else "Acceso Denegado", 'person_name': person_name_for_response, 'access_point_name': access_point_name, 'timestamp': timezone.now()}
+            qr_identifier = serializer.validated_data['qr_identifier']
+            access_point_name = serializer.validated_data['access_point_name']
+
+            requesting_user = request.user
+            active_tenant = None
+            person_name_for_response = None # Initialize here
+
+            try:
+                if not hasattr(requesting_user, 'person_profile') or not requesting_user.person_profile:
+                    logger.warning(f"API AccessVerification: Usuario {requesting_user.username} no tiene person_profile.")
+                    return Response({
+                        'access_granted': False,
+                        'message': "Error de configuración: El usuario API no tiene un perfil de persona asociado.",
+                        'timestamp': timezone.now()
+                    }, status=status.HTTP_403_FORBIDDEN)
+
+                person_profile = requesting_user.person_profile
+                if not person_profile.tenant:
+                    logger.warning(f"API AccessVerification: Perfil de persona {person_profile.identifier} para usuario {requesting_user.username} no tiene un tenant asignado.")
+                    return Response({
+                        'access_granted': False,
+                        'message': "Error de configuración: El perfil de persona del usuario API no está asignado a ninguna empresa.",
+                        'timestamp': timezone.now()
+                    }, status=status.HTTP_403_FORBIDDEN)
+
+                active_tenant = person_profile.tenant
+
+            except Person.DoesNotExist:
+                logger.warning(f"API AccessVerification: No se encontró Person profile para el usuario {requesting_user.username}.")
+                return Response({
+                    'access_granted': False,
+                    'message': "Error de configuración: Perfil de persona no encontrado para el usuario API.",
+                    'timestamp': timezone.now()
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            access_granted = verify_access_with_models(
+                active_tenant=active_tenant,
+                qr_identifier=qr_identifier,
+                access_point_name=access_point_name
+            )
+
+            try:
+                # Fetch the person being accessed, ensuring they belong to the same tenant
+                person_accessed = Person.objects.get(tenant=active_tenant, identifier=qr_identifier)
+                person_name_for_response = person_accessed.full_name
+            except Person.DoesNotExist:
+                # If the person (from QR) does not exist in this tenant, name remains None.
+                # verify_access_with_models would have already returned access_granted = False.
+                pass
+
+            message = f"Acceso {'Permitido' if access_granted else 'Denegado'}"
+            if active_tenant: # Add tenant info to message if available
+                message += f" (Empresa: {active_tenant.name})"
+
+            response_data = {
+                'access_granted': access_granted,
+                'message': message,
+                'person_name': person_name_for_response,
+                'access_point_name': access_point_name,
+                'timestamp': timezone.now()
+            }
             response_serializer = AccessResponseSerializer(data=response_data)
-            if response_serializer.is_valid(raise_exception=True): return Response(response_serializer.data, status=status.HTTP_200_OK)
+            if response_serializer.is_valid(raise_exception=True):
+                return Response(response_serializer.data, status=status.HTTP_200_OK)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class UserPermissionsListAPIView(ListAPIView):
     serializer_class = AccessPermissionSerializer
     permission_classes = [IsAuthenticated]
     def get_queryset(self):
+        """
+        Esta vista debe devolver una lista de todos los permisos
+        para la persona asociada con el usuario actualmente autenticado,
+        asegurando que los permisos pertenezcan al tenant de esa persona.
+        """
         user = self.request.user
         try:
             person_profile = Person.objects.get(user=user)
-            return AccessPermission.objects.filter(person=person_profile).select_related('person', 'access_point').order_by('-valid_until', 'access_point__name')
-        except Person.DoesNotExist: return AccessPermission.objects.none()
+            if person_profile.tenant: # Asegurarse de que el perfil de persona tenga un tenant
+                return AccessPermission.objects.filter(
+                    person=person_profile,
+                    tenant=person_profile.tenant # Filtro explícito por tenant
+                ).select_related('person', 'access_point', 'tenant').order_by('-valid_until', 'access_point__name') # Añadido 'tenant' a select_related
+            else:
+                # Si la persona no tiene un tenant asignado, no debería tener permisos específicos de tenant.
+                logger.warning(f"UserPermissionsListAPIView: Perfil de persona {person_profile.identifier} para usuario {user.username} no tiene un tenant asignado.")
+                return AccessPermission.objects.none()
+        except Person.DoesNotExist:
+            logger.info(f"UserPermissionsListAPIView: No se encontró Person profile para el usuario {user.username}.")
+            return AccessPermission.objects.none()
+        except Exception as e: # Captura más general para errores inesperados
+            logger.error(f"UserPermissionsListAPIView: Error inesperado para usuario {user.username}: {e}")
+            return AccessPermission.objects.none()
