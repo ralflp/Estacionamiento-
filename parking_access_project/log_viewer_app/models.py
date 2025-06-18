@@ -125,9 +125,13 @@ class Vehicle(models.Model):
 
 class AccessPoint(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='access_points', default=get_default_tenant_pk)
-    name = models.CharField(max_length=100, unique=True, help_text="Nombre o ID único del punto de acceso (e.g., 'Puerta Principal Garaje', 'Torno Entrada Este')")
+    name = models.CharField(max_length=100, help_text="Nombre o ID único del punto de acceso (e.g., 'Puerta Principal Garaje', 'Torno Entrada Este')") # Removed unique=True
     description = models.TextField(blank=True, help_text="Descripción adicional del punto de acceso")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (('tenant', 'name'),)
+        ordering = ['tenant', 'name']
 
     def __str__(self):
         return self.name
@@ -155,7 +159,7 @@ class AccessPermission(models.Model):
 class ControlDevice(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, null=False, related_name='control_devices', default=get_default_tenant_pk)
     name = models.CharField(max_length=150, help_text="Nombre descriptivo para el dispositivo")
-    device_id = models.CharField(max_length=100, unique=True, help_text="Identificador único del dispositivo")
+    device_id = models.CharField(max_length=100, help_text="Identificador único del dispositivo") # Removed unique=True
     access_point = models.ForeignKey(AccessPoint, on_delete=models.SET_NULL, null=True, blank=True, related_name='control_devices', help_text="Punto de acceso que este dispositivo controla")
     mqtt_topic = models.CharField(max_length=255, help_text="Tópico MQTT para enviar comandos")
     ip_address = models.GenericIPAddressField(protocol='both', blank=True, null=True, help_text="Dirección IP del dispositivo (opcional)")
@@ -163,6 +167,11 @@ class ControlDevice(models.Model):
     notes = models.TextField(blank=True, help_text="Notas adicionales")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (('tenant', 'device_id'),)
+        ordering = ['tenant', 'name']
+
     def __str__(self):
         ap_name = self.access_point.name if self.access_point else "No asignado"
         return f"{self.name} ({self.device_id}) - AP: {ap_name}"

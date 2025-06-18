@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ page_title|default:"Formulario de Punto de Acceso" }}</title>
+    <!-- Incluir el bloque de <style> común y consistente aquí (similar al de la lista) -->
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f8f9fa; color: #333; }
+        .container { max-width: 700px; margin: 40px auto; padding: 20px 30px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.075); }
+        h1 { text-align: center; color: #333; margin-bottom: 25px; }
+        form p { margin-bottom: 18px; }
+        label { display: block; margin-bottom: 6px; font-weight: bold; color: #495057; }
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 1em;
+        }
+        textarea { resize: vertical; min-height: 80px; }
+        button[type="submit"], .button-style {
+            background-color: #0056b3; color: white; padding: 10px 20px;
+            border: none; border-radius: 4px; cursor: pointer; font-size: 1em;
+            text-decoration: none; display: inline-block; text-align: center;
+        }
+        button[type="submit"]:hover, .button-style:hover { background-color: #003d80; }
+        .form-errors, .errorlist { color: #dc3545; margin-top: 5px; margin-bottom: 10px; list-style-type: none; padding-left: 0; font-size: 0.9em; }
+        .form-field-help-text { font-size: 0.9em; color: #6c757d; display: block; margin-top: 4px; }
+        .messages { list-style-type: none; padding: 0; margin-bottom: 20px; }
+        .messages li { padding: 12px 18px; border-radius: 4px; margin-bottom: 10px; font-size: 0.95em; }
+        .messages li.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .messages li.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .action-links { margin-top: 20px; }
+        a.back-link { color: #0056b3; text-decoration: none; }
+        a.back-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ page_title|default:"Formulario de Punto de Acceso" }}</h1>
+
+        {% if messages %}
+        <ul class="messages">
+            {% for message in messages %}
+                <li class="{{ message.tags }}">{{ message }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+
+            {% if form.non_field_errors %}
+                <div class="form-errors">
+                    {{ form.non_field_errors }}
+                </div>
+            {% endif %}
+
+            {% for field in form %}
+                <p>
+                    {{ field.label_tag }}<br>
+                    {{ field }}
+                    {% if field.help_text %}
+                        <small class="form-field-help-text">{{ field.help_text }}</small>
+                    {% endif %}
+                    {% for error in field.errors %}
+                        <div class="form-errors">{{ error }}</div>
+                    {% endfor %}
+                </p>
+            {% endfor %}
+
+            <button type="submit">Guardar Punto de Acceso</button>
+        </form>
+
+        <div class="action-links">
+            <a href="{% url 'log_viewer_app:access_point_list' %}" class="back-link">Volver a la Lista</a>
+        </div>
+    </div>
+</body>
+</html>

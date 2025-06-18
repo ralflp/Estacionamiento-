@@ -4,7 +4,7 @@ from .models import (
     UserSubscription, Invoice # UserSubscription e Invoice añadidos aquí
 )
 from .forms import (
-    PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm,
+    PersonForm, VehicleForm, AccessPermissionForm, ControlDeviceForm, AccessPointForm, # AccessPointForm importado
     GuestRegistrationForm, PersonProfileEditForm # PersonProfileEditForm importado
 )
 from django.contrib.auth.decorators import login_required
@@ -183,32 +183,156 @@ def permission_update_view(request, pk):
     context = {'form': form, 'permission_instance': permission, 'page_title': f"Editar Permiso: {permission.person.full_name} en {permission.access_point.name}"}
     return render(request, 'log_viewer_app/permission_form.html', context)
 
+@login_required
+def access_point_list_view(request):
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para ver esta lista.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en access_point_list_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
+    access_points = AccessPoint.objects.filter(tenant=active_tenant).select_related('tenant').order_by('name')
+    context = {
+        'access_points': access_points,
+        'active_tenant': active_tenant,
+        'page_title': f'Lista de Puntos de Acceso ({active_tenant.name})'
+    }
+    return render(request, 'log_viewer_app/access_point_list.html', context)
+
+@login_required
+def access_point_create_view(request):
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para realizar esta acción.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en access_point_create_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
+    if request.method == 'POST':
+        form = AccessPointForm(request.POST)
+        if form.is_valid():
+            access_point = form.save(commit=False)
+            access_point.tenant = active_tenant
+            access_point.save()
+            messages.success(request, f"Punto de Acceso '{access_point.name}' creado exitosamente en la empresa {active_tenant.name}.")
+            return redirect('log_viewer_app:access_point_list')
+    else:
+        form = AccessPointForm()
+
+    context = {
+        'form': form,
+        'active_tenant': active_tenant,
+        'page_title': f'Añadir Nuevo Punto de Acceso{( " (" + active_tenant.name + ")") if active_tenant else ""}'
+    }
+    return render(request, 'log_viewer_app/access_point_form.html', context)
+
+@login_required
 def control_device_list_view(request):
-    devices = ControlDevice.objects.all().select_related('access_point').order_by('name')
-    context = {'devices': devices, 'page_title': 'Lista de Dispositivos de Control'}
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para ver esta lista.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en control_device_list_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
+    devices = ControlDevice.objects.filter(tenant=active_tenant).select_related('access_point', 'tenant').order_by('name')
+    context = {
+        'devices': devices,
+        'active_tenant': active_tenant,
+        'page_title': f'Lista de Dispositivos de Control ({active_tenant.name})'
+    }
     return render(request, 'log_viewer_app/control_device_list.html', context)
 
+@login_required
 def control_device_create_view(request):
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para realizar esta acción.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en control_device_create_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
     if request.method == 'POST':
-        form = ControlDeviceForm(request.POST)
+        form = ControlDeviceForm(request.POST, tenant=active_tenant)
         if form.is_valid():
-            form.save()
+            device = form.save(commit=False)
+            device.tenant = active_tenant
+            device.save()
+            messages.success(request, f"Dispositivo de control {device.name} creado exitosamente en la empresa {active_tenant.name}.")
             return redirect('log_viewer_app:control_device_list')
     else:
-        form = ControlDeviceForm()
-    context = {'form': form, 'page_title': 'Añadir Nuevo Dispositivo de Control'}
+        form = ControlDeviceForm(tenant=active_tenant)
+
+    context = {
+        'form': form,
+        'active_tenant': active_tenant,
+        'page_title': f'Añadir Nuevo Dispositivo de Control ({active_tenant.name})'
+    }
     return render(request, 'log_viewer_app/control_device_form.html', context)
 
+@login_required
 def control_device_update_view(request, pk):
+    active_tenant = None
+    try:
+        if not hasattr(request.user, 'person_profile') or \
+           not request.user.person_profile or \
+           not request.user.person_profile.tenant:
+            messages.error(request, "No tienes un perfil de persona o empresa asignado para realizar esta acción.")
+            return redirect('log_viewer_app:user_dashboard')
+        active_tenant = request.user.person_profile.tenant
+    except Exception as e:
+        logger.error(f"Error obteniendo tenant para el usuario {request.user.username} en control_device_update_view: {e}")
+        messages.error(request, "Error al determinar tu empresa. Contacta al administrador.")
+        return redirect('log_viewer_app:user_dashboard')
+
     device = get_object_or_404(ControlDevice, pk=pk)
+
+    # Verify that the device belongs to the active_tenant
+    if device.tenant != active_tenant:
+        messages.error(request, "No tiene permiso para editar este dispositivo.")
+        return redirect('log_viewer_app:control_device_list')
+
     if request.method == 'POST':
-        form = ControlDeviceForm(request.POST, instance=device)
+        form = ControlDeviceForm(request.POST, instance=device, tenant=active_tenant)
         if form.is_valid():
+            # Tenant of the device should not change on update via this form
             form.save()
+            messages.success(request, f"Dispositivo {device.name} actualizado exitosamente.")
             return redirect('log_viewer_app:control_device_list')
     else:
-        form = ControlDeviceForm(instance=device)
-    context = {'form': form, 'device': device, 'page_title': f'Editar Dispositivo: {device.name}'}
+        form = ControlDeviceForm(instance=device, tenant=active_tenant)
+
+    context = {
+        'form': form,
+        'device': device,
+        'active_tenant': active_tenant,
+        'page_title': f'Editar Dispositivo: {device.name} ({active_tenant.name})'
+    }
     return render(request, 'log_viewer_app/control_device_form.html', context)
 
 @login_required

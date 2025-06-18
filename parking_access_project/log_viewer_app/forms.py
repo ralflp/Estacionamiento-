@@ -40,6 +40,22 @@ class AccessPermissionForm(forms.ModelForm):
             self.fields['valid_until'].required = False
 
 class ControlDeviceForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        tenant = kwargs.pop('tenant', None)
+        super().__init__(*args, **kwargs)
+
+        if tenant:
+            self.fields['access_point'].queryset = AccessPoint.objects.filter(tenant=tenant).order_by('name')
+        elif self.instance and self.instance.pk and hasattr(self.instance, 'tenant') and self.instance.tenant:
+            # If editing an instance and tenant was not explicitly passed,
+            # filter by the instance's current tenant.
+            self.fields['access_point'].queryset = AccessPoint.objects.filter(tenant=self.instance.tenant).order_by('name')
+        else:
+            # No tenant context, show no access points to prevent incorrect assignment.
+            # This might happen in Django admin if not customized to pass tenant,
+            # or if the form is instantiated somewhere without tenant context.
+            self.fields['access_point'].queryset = AccessPoint.objects.none()
+
     class Meta:
         model = ControlDevice
         fields = [
@@ -108,3 +124,20 @@ class PersonProfileEditForm(forms.ModelForm):
         help_texts = {
             'full_name': "Así es como tu nombre se mostrará en el sistema.",
         }
+
+class AccessPointForm(forms.ModelForm):
+    class Meta:
+        model = AccessPoint
+        fields = ['name', 'description']
+        labels = {
+            'name': "Nombre del Punto de Acceso",
+            'description': "Descripción Adicional (opcional)",
+        }
+        help_texts = {
+            'name': "Identificador único para este punto de acceso dentro de la empresa (e.g., 'Puerta Principal Garaje').",
+            'description': "Detalles como ubicación, tipo de puerta/barrera, etc.",
+        }
+        # widgets = {
+        #     'name': forms.TextInput(attrs={'class': 'form-control'}),
+        #     'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+        # }

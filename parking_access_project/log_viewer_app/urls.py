@@ -18,6 +18,10 @@ urlpatterns = [
     path('control-devices/add/', views.control_device_create_view, name='control_device_create'),
     path('control-devices/<int:pk>/update/', views.control_device_update_view, name='control_device_update'),
 
+    # URLs para Puntos de Acceso
+    path('access-points/', views.access_point_list_view, name='access_point_list'),
+    path('access-points/add/', views.access_point_create_view, name='access_point_create'),
+
     # URLs para el Portal de Usuario
     path('portal/dashboard/', views.user_dashboard_view, name='user_dashboard'),
     path('portal/profile/edit/', views.person_profile_edit_view, name='person_profile_edit'), # Nueva URL

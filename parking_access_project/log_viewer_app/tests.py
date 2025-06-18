@@ -307,24 +307,66 @@ class AccessPermissionFormTest(TestCase):
         self.assertTrue(permission.is_active)
 
 class ControlDeviceFormTest(TestCase):
-    def setUp(self):
-        self.ap = AccessPoint.objects.create(name="Device Form AP")
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant1 = Tenant.objects.create(name="CDForm Tenant 1", subdomain_prefix="cdft1")
+        cls.ap_t1 = AccessPoint.objects.create(name="Device Form AP T1", tenant=cls.tenant1)
+        # Default tenant and its AP, in case some tests don't pass tenant explicitly
+        cls.default_tenant = Tenant.objects.get(pk=get_default_tenant_pk())
+        cls.ap_default = AccessPoint.objects.create(name="Device Form AP Default", tenant=cls.default_tenant)
+
 
     def test_control_device_form_valid_data(self):
-        form = ControlDeviceForm(data={'name': 'Test Device', 'device_id': 'DEVFORM001', 'access_point': self.ap.pk, 'mqtt_topic': 'test/device/topic', 'is_active': True})
+        form_data = {'name': 'Test Device', 'device_id': 'DEVFORM001', 'access_point': self.ap_t1.pk, 'mqtt_topic': 'test/device/topic', 'is_active': True}
+        form = ControlDeviceForm(data=form_data, tenant=self.tenant1)
+        if not form.is_valid():
+            print(f"test_control_device_form_valid_data errors: {form.errors.as_json()}")
         self.assertTrue(form.is_valid())
 
     def test_control_device_form_invalid_missing_device_id(self):
-        form = ControlDeviceForm(data={'name': 'Test Device No ID'})
+        # Not passing tenant, so access_point queryset will be none, making access_point field invalid if provided
+        form_data = {'name': 'Test Device No ID', 'access_point': self.ap_t1.pk}
+        form = ControlDeviceForm(data=form_data) # No tenant passed
         self.assertFalse(form.is_valid())
         self.assertIn('device_id', form.errors)
+        # Access point will also be an error if its queryset is none and a value is given
+        self.assertIn('access_point', form.errors)
 
     def test_control_device_form_save(self):
-        form = ControlDeviceForm(data={'name': 'Save Device', 'device_id': 'SDEV001', 'access_point': self.ap.pk, 'mqtt_topic': 'save/device/topic'})
+        form_data = {'name': 'Save Device', 'device_id': 'SDEV001', 'access_point': self.ap_t1.pk, 'mqtt_topic': 'save/device/topic'}
+        form = ControlDeviceForm(data=form_data, tenant=self.tenant1)
+        if not form.is_valid():
+            print(f"test_control_device_form_save errors: {form.errors.as_json()}")
         self.assertTrue(form.is_valid())
-        device = form.save()
+        device = form.save(commit=False)
+        # The tenant should be set in the view, not by the form directly unless passed to instance
+        # For this test, we assume it would be set before full save if not an instance.
+        # However, since ControlDevice model has a default tenant, it will get it.
+        # If we want to ensure it's self.tenant1, it must be set before save or form must handle it.
+        # For now, let's test that it gets *a* tenant.
+        device.tenant = self.tenant1 # Simulate what view would do
+        device.save()
         self.assertIsInstance(device, ControlDevice)
         self.assertEqual(device.device_id, 'SDEV001')
+        self.assertEqual(device.tenant, self.tenant1)
+
+    def test_control_device_form_no_tenant_passed_no_instance(self):
+        """If no tenant and no instance, access_point queryset should be empty."""
+        form = ControlDeviceForm(data={'name': 'Test Device', 'device_id': 'DEVFORM002', 'mqtt_topic': 'test/topic'})
+        self.assertEqual(form.fields['access_point'].queryset.count(), 0)
+        # Form should still be valid if access_point is not required or not provided
+        # AccessPoint is not required on form (blank=True on model), so it should be valid
+        self.assertTrue(form.is_valid())
+
+    def test_control_device_form_instance_filters_access_point(self):
+        """If editing an instance, APs should be filtered by instance's tenant if tenant not passed to form."""
+        device_instance = ControlDevice.objects.create(name="Instance Device", device_id="INST001", tenant=self.tenant1, access_point=self.ap_t1)
+        form = ControlDeviceForm(instance=device_instance) # No tenant passed, should use instance's tenant
+        self.assertQuerySetEqual(
+            form.fields['access_point'].queryset.order_by('pk'),
+            AccessPoint.objects.filter(tenant=self.tenant1).order_by('pk'),
+            transform=lambda x: x
+        )
 
 class GuestRegistrationFormTest(TestCase):
     def setUp(self):
@@ -640,40 +682,151 @@ class ControlDeviceListViewTest(TestCase):
         self.assertContains(response, "CDL1")
 
 class ControlDeviceCreateViewTest(TestCase):
-    def setUp(self):
-        self.ap = AccessPoint.objects.create(name="CD Create AP")
+    @classmethod
+    def setUpTestData(cls):
+        cls.tenant1 = Tenant.objects.create(name="CD Create View Tenant 1", subdomain_prefix="cdcvt1")
+        cls.user_t1 = User.objects.create_user(username='user_t1_cdcv', password='password')
+        cls.person_t1 = Person.objects.create(user=cls.user_t1, full_name="User T1 CDCV", identifier="USER_T1_CDCV_ID", tenant=cls.tenant1)
 
-    def test_cd_create_view_get(self):
-        response = self.client.get(reverse('log_viewer_app:control_device_create'))
+        cls.ap_t1 = AccessPoint.objects.create(tenant=cls.tenant1, name="AP T1 for CDCV")
+
+        cls.user_no_profile_cdcv = User.objects.create_user(username='user_no_profile_cdcv', password='password')
+
+        cls.create_url = reverse('log_viewer_app:control_device_create')
+        cls.list_url = reverse('log_viewer_app:control_device_list')
+        cls.login_url = '/accounts/login/' # Hardcoded
+
+    def test_cd_create_view_login_required_get(self):
+        response = self.client.get(self.create_url)
+        self.assertRedirects(response, f'{self.login_url}?next={self.create_url}')
+
+    def test_cd_create_view_get_shows_form_for_authorized_user(self):
+        self.client.login(username='user_t1_cdcv', password='password')
+        response = self.client.get(self.create_url)
         self.assertEqual(response.status_code, 200)
-        self.assertIsInstance(response.context['form'], ControlDeviceForm)
+        self.assertTemplateUsed(response, 'log_viewer_app/control_device_form.html')
+        form = response.context['form']
+        self.assertIsInstance(form, ControlDeviceForm)
+        self.assertEqual(response.context['active_tenant'], self.tenant1)
+        # Check that access_point queryset in form is filtered by tenant1
+        self.assertQuerySetEqual(
+            form.fields['access_point'].queryset.order_by('pk'),
+            AccessPoint.objects.filter(tenant=self.tenant1).order_by('pk'),
+            transform=lambda x: x
+        )
 
-    def test_cd_create_view_post_valid(self):
-        response = self.client.post(reverse('log_viewer_app:control_device_create'), {'name': 'New CD', 'device_id': 'NCD01', 'access_point': self.ap.pk, 'mqtt_topic': 'new/cd/topic'})
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(ControlDevice.objects.filter(device_id='NCD01').exists())
+    def test_cd_create_view_post_assigns_correct_tenant(self):
+        self.client.login(username='user_t1_cdcv', password='password')
+        device_data = {
+            'name': 'New CD for T1',
+            'device_id': 'NCD01_T1',
+            'access_point': self.ap_t1.pk,
+            'mqtt_topic': 'new/cd/topic/t1'
+        }
+        response = self.client.post(self.create_url, device_data)
+        self.assertRedirects(response, self.list_url)
+        created_device = ControlDevice.objects.get(device_id='NCD01_T1')
+        self.assertEqual(created_device.tenant, self.tenant1)
+        self.assertEqual(created_device.name, 'New CD for T1')
+
+    def test_cd_create_view_post_invalid_data(self):
+        self.client.login(username='user_t1_cdcv', password='password')
+        device_data = {'name': '', 'device_id': 'INVALID_CD_ID'} # Invalid: name is required
+        response = self.client.post(self.create_url, device_data)
+        self.assertEqual(response.status_code, 200) # Should re-render form
+        self.assertFormError(response.context['form'], 'name', 'This field is required.')
+        self.assertFormError(response.context['form'], 'mqtt_topic', 'This field is required.') # Also device_id and mqtt_topic
+
+    def test_cd_create_view_user_no_profile_redirects(self):
+        self.client.login(username='user_no_profile_cdcv', password='password')
+        response_get = self.client.get(self.create_url)
+        self.assertRedirects(response_get, reverse('log_viewer_app:user_dashboard'))
+
+        response_post = self.client.post(self.create_url, {'name': 'Fail Device', 'device_id': 'FAIL_CD_ID'})
+        self.assertRedirects(response_post, reverse('log_viewer_app:user_dashboard'))
 
 class ControlDeviceUpdateViewTest(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.ap = AccessPoint.objects.create(name="CD Update AP")
-        cls.device = ControlDevice.objects.create(name="CD Update Dev", device_id="CDU01", access_point=cls.ap, mqtt_topic="cd/update/topic")
+        cls.tenant1 = Tenant.objects.create(name="CD Update View Tenant 1", subdomain_prefix="cduvt1")
+        cls.user_t1 = User.objects.create_user(username='user_t1_cduv', password='password')
+        cls.person_t1 = Person.objects.create(user=cls.user_t1, full_name="User T1 CDUV", identifier="USER_T1_CDUV_ID", tenant=cls.tenant1)
 
-    def test_cd_update_view_get(self):
-        response = self.client.get(reverse('log_viewer_app:control_device_update', kwargs={'pk': self.device.pk}))
+        cls.ap_t1 = AccessPoint.objects.create(tenant=cls.tenant1, name="AP T1 for CDUV")
+        cls.device_t1 = ControlDevice.objects.create(tenant=cls.tenant1, name="CD Update Dev T1", device_id="CDU01_T1", access_point=cls.ap_t1, mqtt_topic="t1/cd/update/topic")
+
+        # For testing access from another tenant
+        cls.tenant2 = Tenant.objects.create(name="CD Update View Tenant 2", subdomain_prefix="cduvt2")
+        cls.user_t2 = User.objects.create_user(username='user_t2_cduv', password='password')
+        Person.objects.create(user=cls.user_t2, full_name="User T2 CDUV", identifier="USER_T2_CDUV_ID", tenant=cls.tenant2)
+
+        cls.update_url_t1 = reverse('log_viewer_app:control_device_update', kwargs={'pk': cls.device_t1.pk})
+        cls.list_url = reverse('log_viewer_app:control_device_list')
+        cls.login_url = '/accounts/login/'
+
+    def test_cd_update_view_login_required(self):
+        response = self.client.get(self.update_url_t1)
+        self.assertRedirects(response, f'{self.login_url}?next={self.update_url_t1}')
+
+    def test_cd_update_view_get_authorized_user(self):
+        self.client.login(username='user_t1_cduv', password='password')
+        response = self.client.get(self.update_url_t1)
         self.assertEqual(response.status_code, 200)
         self.assertIsInstance(response.context['form'], ControlDeviceForm)
-        self.assertContains(response, "CDU01")
+        self.assertEqual(response.context['device'], self.device_t1)
+        self.assertContains(response, "CDU01_T1")
+        self.assertEqual(response.context['active_tenant'], self.tenant1)
 
     def test_cd_update_view_post_valid(self):
-        response = self.client.post(reverse('log_viewer_app:control_device_update', kwargs={'pk': self.device.pk}), {'name': 'Updated CD Name', 'device_id': 'CDU01_updated', 'access_point': self.ap.pk, 'mqtt_topic': 'updated/cd/topic', 'is_active': True})
-        self.assertEqual(response.status_code, 302)
-        updated_device = ControlDevice.objects.get(pk=self.device.pk)
-        self.assertEqual(updated_device.name, "Updated CD Name")
-        self.assertEqual(updated_device.device_id, "CDU01_updated")
+        self.client.login(username='user_t1_cduv', password='password')
+        updated_data = {
+            'name': 'Updated CD Name T1',
+            'device_id': 'CDU01_T1_updated', # device_id can be updated
+            'access_point': self.ap_t1.pk,
+            'mqtt_topic': 'updated/t1/cd/topic',
+            'is_active': False # Change a value
+        }
+        response = self.client.post(self.update_url_t1, updated_data)
+        self.assertRedirects(response, self.list_url)
+
+        self.device_t1.refresh_from_db()
+        self.assertEqual(self.device_t1.name, "Updated CD Name T1")
+        self.assertEqual(self.device_t1.device_id, "CDU01_T1_updated")
+        self.assertFalse(self.device_t1.is_active)
+        self.assertEqual(self.device_t1.tenant, self.tenant1) # Tenant should not change
+
+    def test_cd_update_view_user_from_different_tenant_forbidden(self):
+        self.client.login(username='user_t2_cduv', password='password') # User from tenant2
+        response = self.client.get(self.update_url_t1) # Trying to access tenant1's device
+        self.assertRedirects(response, self.list_url) # View redirects to list with error
+        # Check for error message if possible (requires messages middleware testing setup or checking session)
+
+    def test_cd_update_view_post_different_tenant_device_id_if_allowed_by_form(self):
+        # This tests if form validation + view logic prevents changing device_id to one that exists in another tenant.
+        # Given device_id is now unique_together with tenant, this should be fine.
+        # Create a device in tenant2 with a device_id we want to try for tenant1's device
+        ControlDevice.objects.create(tenant=self.tenant2, name="CD T2", device_id="CONFLICT_ID", mqtt_topic="t2/topic")
+
+        self.client.login(username='user_t1_cduv', password='password')
+        conflicting_data = {
+            'name': self.device_t1.name,
+            'device_id': 'CONFLICT_ID', # This ID exists in Tenant 2
+            'access_point': self.ap_t1.pk,
+            'mqtt_topic': self.device_t1.mqtt_topic,
+            'is_active': self.device_t1.is_active
+        }
+        response = self.client.post(self.update_url_t1, conflicting_data)
+        # The form should be valid because ('CD Update View Tenant 1', 'CONFLICT_ID') is unique.
+        # The unique_together is ('tenant', 'device_id').
+        self.assertRedirects(response, self.list_url)
+        self.device_t1.refresh_from_db()
+        self.assertEqual(self.device_t1.device_id, 'CONFLICT_ID')
+
 
     def test_cd_update_view_non_existent(self):
-        response = self.client.get(reverse('log_viewer_app:control_device_update', kwargs={'pk': 9999}))
+        self.client.login(username='user_t1_cduv', password='password')
+        non_existent_url = reverse('log_viewer_app:control_device_update', kwargs={'pk': 99999})
+        response = self.client.get(non_existent_url)
         self.assertEqual(response.status_code, 404)
 
 
