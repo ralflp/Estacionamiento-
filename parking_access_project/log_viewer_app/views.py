@@ -222,15 +222,15 @@ def access_point_create_view(request):
         return redirect('log_viewer_app:user_dashboard')
 
     if request.method == 'POST':
-        form = AccessPointForm(request.POST)
+        form = AccessPointForm(request.POST, tenant=active_tenant)
         if form.is_valid():
             access_point = form.save(commit=False)
             access_point.tenant = active_tenant
             access_point.save()
-            messages.success(request, f"Punto de Acceso '{access_point.name}' creado exitosamente en la empresa {active_tenant.name}.")
+            messages.success(request, f"Punto de Acceso '{access_point.name}' creado exitosamente en la empresa {active_tenant.name}.") # Message already existed
             return redirect('log_viewer_app:access_point_list')
     else:
-        form = AccessPointForm()
+        form = AccessPointForm(tenant=active_tenant)
 
     context = {
         'form': form,

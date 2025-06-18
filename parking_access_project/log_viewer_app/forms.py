@@ -126,6 +126,42 @@ class PersonProfileEditForm(forms.ModelForm):
         }
 
 class AccessPointForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        self.tenant = kwargs.pop('tenant', None)
+        # If editing an instance that already has a tenant, and tenant is not passed to form,
+        # use instance's tenant for validation.
+        # This is important if form is directly instantiated with an instance in some contexts.
+        # However, our create_view will explicitly pass the tenant.
+        # For update_view (if it uses this form), it should also pass the tenant.
+        if not self.tenant and 'instance' in kwargs and kwargs['instance'] and hasattr(kwargs['instance'], 'tenant'):
+            self.tenant = kwargs['instance'].tenant
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        name = cleaned_data.get("name")
+
+        if not self.tenant:
+            # This should ideally not happen if the view always passes the tenant.
+            # If it does, we can't validate tenant-scoped uniqueness.
+            # Depending on policy, either raise an error or skip validation.
+            # For now, let's assume tenant is crucial for this validation.
+            # To prevent saving without tenant, the model already has null=False.
+            # This check is for the form's unique_together-like validation.
+            # Consider raising a more specific error or logging if tenant is missing for form validation.
+            pass # Or: raise forms.ValidationError("Tenant no proporcionado al formulario para validación.")
+
+        if name and self.tenant:
+            queryset = AccessPoint.objects.filter(tenant=self.tenant, name=name)
+            if self.instance and self.instance.pk: # If editing an existing instance
+                queryset = queryset.exclude(pk=self.instance.pk)
+
+            if queryset.exists():
+                self.add_error('name', forms.ValidationError(
+                    "Ya existe un Punto de Acceso con este nombre en su tenant."
+                ))
+        return cleaned_data
+
     class Meta:
         model = AccessPoint
         fields = ['name', 'description']
