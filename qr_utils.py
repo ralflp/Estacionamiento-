@@ -1,6 +1,6 @@
 # qr_utils.py
 import qrcode
-"import cv2 # OpenCV para la lectura de imágenes y preprocesamiento si es necesario
+import cv2 # OpenCV para la lectura de imágenes y preprocesamiento si es necesario
 from pyzbar.pyzbar import decode
 
 def generate_qr(data, filename="qr_code.png"):
